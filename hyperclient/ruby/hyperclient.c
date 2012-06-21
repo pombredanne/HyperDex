@@ -1,3 +1,46 @@
+/* Ruby */
+#include <ruby.h>
+
+/* HyperClient */
+#include "hyperclient/hyperclient.h"
+
+VALUE chyperclient;
+
+VALUE
+rhc_new(VALUE class, VALUE host, VALUE port)
+{
+    VALUE argv[2];
+    VALUE tdata;
+    struct hyperclient* hc = hyperclient_create(STR2CSTR(host), NUM2UINT(port));
+
+    if (!hc)
+    {
+        rb_raise(rb_eSystemCallError, "HyperClient connect failed");
+        return Qnil;
+    }
+
+    tdata = Data_Wrap_Struct(class, 0, hyperclient_destroy, hc);
+    argv[0] = host;
+    argv[1] = port;
+    rb_obj_call_init(tdata, 2, argv);
+    return tdata;
+}
+
+VALUE
+rhc_init(VALUE self, VALUE host, VALUE port)
+{
+    return self;
+}
+
+void
+Init_hyperclient()
+{
+    chyperclient = rb_define_class("HyperClient", rb_cObject);
+    rb_define_singleton_method(chyperclient, "new", rhc_new, 2);
+    rb_define_method(chyperclient, "initialize", rhc_init, 2);
+}
+
+#if 0
 #include "hyperclient/hyperclient.h"
 #include "ruby.h"
 #include <stdio.h>
@@ -771,39 +814,7 @@ VALUE hc_destroy(VALUE self)
 	return Qnil;
 }
 
-VALUE hc_new(VALUE class, VALUE coordinator, VALUE port)
-{
-        VALUE argv[2];
-	VALUE tdata;
-        struct ruby_hyperclient *ptr;
-	ptr = ALLOC(struct ruby_hyperclient);
-        ptr->client = hyperclient_create(STR2CSTR(coordinator), NUM2INT(port));
-	if(ptr->client == NULL)
-	{
-		rb_raise(rb_eArgError,"Client Error");
-		return Qnil;
-	}
-	ptr->attrs = ALLOC(struct hyperclient_attribute*);
-	ptr->attrs_size = ALLOC(size_t);
-	ptr->ret = ALLOC(enum hyperclient_returncode);
-        tdata = Data_Wrap_Struct(class, 0, 0, ptr);
-        argv[0] = coordinator;
-        argv[1] = port;
-        rb_obj_call_init(tdata, 2, argv);
-        return tdata;
-}
-
-VALUE hc_init(VALUE self, VALUE coordinator, VALUE port)
-{
-	rb_iv_set(self, "@coordnator", coordinator);
-	rb_iv_set(self, "@port", port);
-	return self;
-}
-
 void Init_hyperclient() {
-  chyperclient = rb_define_class("HyperClient", rb_cObject);
-  rb_define_singleton_method(chyperclient, "new", hc_new, 2);
-  rb_define_method(chyperclient, "initialize", hc_init, 2);
   rb_define_method(chyperclient, "get", hc_get, 2);
   rb_define_method(chyperclient, "put", hc_put, 3);
   rb_define_method(chyperclient, "async_put", hc_async_put, 3);
@@ -825,3 +836,4 @@ void Init_hyperclient() {
 }
 
 
+#endif
