@@ -124,6 +124,8 @@ hyperclient/ruby/.dirstamp
 hyperclient/ruby/hyperclient.la
 hyperclient/ruby/hyperclient_ruby_hyperclient_la-hyperclient.lo
 hyperclient/ruby/hyperclient_ruby_hyperclient_la-hyperclient.o
+hyperclient/ruby/hyperclient_ruby_hyperclient_la-type_conversion.lo
+hyperclient/ruby/hyperclient_ruby_hyperclient_la-type_conversion.o
 hyperclient-ycsb-0.1.dev.jar
 hyperclient-ycsb-0.5.dev.jar
 hypercoordinator/client.pyc

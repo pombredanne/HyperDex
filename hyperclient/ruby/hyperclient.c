@@ -1,17 +1,827 @@
+/* Copyright (c) 2012, Cornell University
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright notice,
+ *       this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *     * Neither the name of HyperDex nor the names of its contributors may be
+ *       used to endorse or promote products derived from this software without
+ *       specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
 /* Ruby */
 #include <ruby.h>
 
+/* HyperDex */
+#include "macros.h"
+
 /* HyperClient */
 #include "hyperclient/hyperclient.h"
+#include "hyperclient/ruby/type_conversion.h"
+#include "hyperdex.h"
 
-VALUE chyperclient;
+static VALUE chyperclient;
+static VALUE cexcept;
+static VALUE cdeferred;
+static VALUE cdeferred_get;
+static VALUE cdeferred_from_attrs;
+static VALUE cdeferred_condput;
+static VALUE cdeferred_del;
+static VALUE cdeferred_map_op;
+
+/******************************* Error Handling *******************************/
+
+#define RHC_ERROR_CASE(STATUS, DESCRIPTION) \
+    case STATUS: \
+        exception = rb_exc_new2(cexcept, DESCRIPTION); \
+        rb_iv_set(exception, "@status", rb_uint_new(status)); \
+        rb_iv_set(exception, "@symbol", rb_str_new2(hdxstr(STATUS))); \
+        break
+
+void
+rhc_throw_hyperclient_exception(enum hyperclient_returncode status, const char* attr)
+{
+    VALUE exception = Qnil;
+    const char* real_attr = attr == NULL ? "" : attr;
+    char buf[2048];
+    size_t num = 2047;
+
+    switch (status)
+    {
+        RHC_ERROR_CASE(HYPERCLIENT_SUCCESS, "Success");
+        RHC_ERROR_CASE(HYPERCLIENT_NOTFOUND, "Not Found");
+        RHC_ERROR_CASE(HYPERCLIENT_SEARCHDONE, "Search Done");
+        RHC_ERROR_CASE(HYPERCLIENT_CMPFAIL, "Conditional Operation Did Not Match Object");
+        RHC_ERROR_CASE(HYPERCLIENT_READONLY, "Cluster is in a Read-Only State");
+        RHC_ERROR_CASE(HYPERCLIENT_UNKNOWNSPACE, "Unknown Space");
+        RHC_ERROR_CASE(HYPERCLIENT_COORDFAIL, "Coordinator Failure");
+        RHC_ERROR_CASE(HYPERCLIENT_SERVERERROR, "Server Error");
+        RHC_ERROR_CASE(HYPERCLIENT_POLLFAILED, "Polling Failed");
+        RHC_ERROR_CASE(HYPERCLIENT_OVERFLOW, "Integer-overflow or divide-by-zero");
+        RHC_ERROR_CASE(HYPERCLIENT_RECONFIGURE, "Reconfiguration");
+        RHC_ERROR_CASE(HYPERCLIENT_TIMEOUT, "Timeout");
+        case HYPERCLIENT_UNKNOWNATTR:
+            num = snprintf(buf, 2047, "Unknown attribute \"%s\"", real_attr);
+            num = num > 2047 ? 2047 : num;
+            buf[num] = '\0';
+            exception = rb_exc_new2(cexcept, buf);
+            rb_iv_set(exception, "@status", rb_uint_new(status));
+            rb_iv_set(exception, "@symbol", rb_str_new2("HYPERCLIENT_UNKNOWNATTR"));
+            break;
+        case HYPERCLIENT_DUPEATTR:
+            num = snprintf(buf, 2047, "Duplicate attribute \"%s\"", real_attr);
+            num = num > 2047 ? 2047 : num;
+            buf[num] = '\0';
+            exception = rb_exc_new2(cexcept, buf);
+            rb_iv_set(exception, "@status", rb_uint_new(status));
+            rb_iv_set(exception, "@symbol", rb_str_new2("HYPERCLIENT_DUPEATTR"));
+            break;
+        RHC_ERROR_CASE(HYPERCLIENT_NONEPENDING, "None pending");
+        RHC_ERROR_CASE(HYPERCLIENT_DONTUSEKEY, "Do not specify the key in a search predicate and do not redundantly specify the key for an insert");
+        case HYPERCLIENT_WRONGTYPE:
+            num = snprintf(buf, 2047, "Attribute \"%s\" has the wrong type", real_attr);
+            num = num > 2047 ? 2047 : num;
+            buf[num] = '\0';
+            exception = rb_exc_new2(cexcept, buf);
+            rb_iv_set(exception, "@status", rb_uint_new(status));
+            rb_iv_set(exception, "@symbol", rb_str_new2("HYPERCLIENT_WRONGTYPE"));
+            break;
+        RHC_ERROR_CASE(HYPERCLIENT_NOMEM, "Memory allocation failed");
+        RHC_ERROR_CASE(HYPERCLIENT_EXCEPTION, "Internal Error (file a bug)");
+        default:
+            exception = rb_exc_new2(cexcept, "Unknown Error (file a bug)");
+            rb_iv_set(exception, "@status", rb_uint_new(status));
+            rb_iv_set(exception, "@symbol", rb_str_new2("BUG"));
+            break;
+    }
+
+    rb_exc_raise(exception);
+}
+
+#undef RHC_ERROR_CASE
+
+/****************************** Check Request ID ******************************/
+
+static void
+check_reqid(int64_t reqid, enum hyperclient_returncode status)
+{
+    if (reqid < 0)
+    {
+        rhc_throw_hyperclient_exception(status, "");
+    }
+}
+
+static void
+check_reqid_key_attrs(int64_t reqid, enum hyperclient_returncode status,
+                      struct hyperclient_attribute* attrs, size_t attrs_sz)
+{
+    ssize_t idx = 0;
+    const char* attr = "";
+
+    if (reqid < 0)
+    {
+        idx = -2 - reqid;
+
+        if (idx >= 0 && idx < attrs_sz && attrs)
+        {
+            attr = attrs[idx].attr;
+        }
+
+        rhc_throw_hyperclient_exception(status, attr);
+    }
+}
+
+static void
+check_reqid_key_attrs2(int64_t reqid, enum hyperclient_returncode status,
+                       struct hyperclient_attribute* attrs1, size_t attrs_sz1,
+                       struct hyperclient_attribute* attrs2, size_t attrs_sz2)
+{
+    ssize_t idx = 0;
+    const char* attr = "";
+
+    if (reqid < 0)
+    {
+        idx = -2 - reqid;
+
+        if (idx >= 0 && idx < attrs_sz1 && attrs1)
+        {
+            attr = attrs1[idx].attr;
+        }
+
+        idx -= attrs_sz1;
+
+        if (idx >= 0 && idx < attrs_sz2 && attrs2)
+        {
+            attr = attrs2[idx].attr;
+        }
+
+        rhc_throw_hyperclient_exception(status, attr);
+    }
+}
+
+#if 0
+cdef _check_reqid_key_map_attrs(int64_t reqid, hyperclient_returncode status,
+                                hyperclient_map_attribute* attrs, size_t attrs_sz):
+    cdef bytes attr
+    if reqid < 0:
+        idx = -2 - reqid
+        attr = None
+        if idx >= 0 and idx < attrs_sz and attrs and attrs[idx].attr:
+            attr = attrs[idx].attr
+        raise HyperClientException(status, attr)
+
+
+cdef _check_reqid_search(int64_t reqid, hyperclient_returncode status,
+                         hyperclient_attribute* eq, size_t eq_sz,
+                         hyperclient_range_query* rn, size_t rn_sz):
+    cdef bytes attr
+    if reqid < 0:
+        idx = -1 - reqid
+        attr = None
+        if idx >= 0 and idx < eq_sz and eq and eq[idx].attr:
+            attr = eq[idx].attr
+        idx -= eq_sz
+        if idx >= 0 and idx < rn_sz and rn and rn[idx].attr:
+            attr = rn[idx].attr
+        raise HyperClientException(status, attr)
+#endif
+
+/******************************* Deferred Class *******************************/
+
+#define RHC_DEFERRED \
+    VALUE client; \
+    int64_t reqid; \
+    enum hyperclient_returncode status; \
+    int finished \
+
+struct rhc_deferred
+{
+    RHC_DEFERRED;
+};
+
+void
+rhc_deferred_mark(struct rhc_deferred* tom)
+{
+    if (tom)
+    {
+        rb_gc_mark(tom->client);
+    }
+}
+
+void
+rhc_deferred_free(struct rhc_deferred* tom)
+{
+    if (tom)
+    {
+        free(tom);
+    }
+}
+
+VALUE
+rhc_deferred_alloc(VALUE class)
+{
+    VALUE tdata;
+    struct rhc_deferred* d = malloc(sizeof(struct rhc_deferred));
+
+    if (!d)
+    {
+        rb_raise(rb_eNoMemError, "failed to allocate memory");
+        return Qnil;
+    }
+
+    memset(d, 0, sizeof(struct rhc_deferred));
+    d->client = Qnil;
+    d->reqid = 0;
+    d->status = HYPERCLIENT_ZERO;
+    d->finished = 0;
+    tdata = Data_Wrap_Struct(class, rhc_deferred_mark, rhc_deferred_free, d);
+    return tdata;
+}
+
+VALUE
+rhc_deferred_init(VALUE self, VALUE client)
+{
+    struct rhc_deferred* d = NULL;
+    Data_Get_Struct(self, struct rhc_deferred, d);
+    d->client = client;
+    return self;
+}
+
+VALUE
+rhc_deferred_callback(VALUE self)
+{
+    VALUE ops;
+    struct rhc_deferred* d = NULL;
+    Data_Get_Struct(self, struct rhc_deferred, d);
+    d->finished = 1;
+    ops = rb_iv_get(d->client, "ops");
+    rb_hash_delete(ops, INT2NUM(d->reqid));
+    return Qnil;
+}
+
+VALUE
+rhc_deferred_wait(VALUE self)
+{
+    VALUE from_loop;
+    struct rhc_deferred* d = NULL;
+    Data_Get_Struct(self, struct rhc_deferred, d);
+
+    while (!d->finished && d->reqid > 0)
+    {
+        from_loop = rb_funcall(d->client, rb_intern("loop"), 0);
+
+        if (from_loop == Qnil)
+        {
+            return Qnil;
+        }
+    }
+
+    d->finished = 1;
+    return Qnil;
+}
+
+/****************************** DeferredGet Class *****************************/
+
+struct rhc_deferred_get
+{
+    RHC_DEFERRED;
+    struct hyperclient_attribute* attrs;
+    size_t attrs_sz;
+};
+
+void
+rhc_deferred_get_free(struct rhc_deferred_get* tom)
+{
+    if (tom)
+    {
+        if (tom->attrs)
+        {
+            hyperclient_destroy_attrs(tom->attrs, tom->attrs_sz);
+        }
+
+        free(tom);
+    }
+}
+
+VALUE
+rhc_deferred_get_new(VALUE client, VALUE space, VALUE key)
+{
+    VALUE argv[3];
+    argv[0] = client;
+    argv[1] = space;
+    argv[2] = key;
+    return rb_class_new_instance(3, argv, cdeferred_get);
+}
+
+VALUE
+rhc_deferred_get_alloc(VALUE class)
+{
+    VALUE tdata;
+    struct rhc_deferred_get* d = malloc(sizeof(struct rhc_deferred_get));
+
+    if (!d)
+    {
+        rb_raise(rb_eNoMemError, "failed to allocate memory");
+        return Qnil;
+    }
+
+    memset(d, 0, sizeof(struct rhc_deferred_get));
+    d->client = Qnil;
+    d->reqid = 0;
+    d->status = HYPERCLIENT_ZERO;
+    d->finished = 0;
+    d->attrs = NULL;
+    d->attrs_sz = 0;
+    tdata = Data_Wrap_Struct(class, rhc_deferred_mark, rhc_deferred_get_free, d);
+    return tdata;
+}
+
+VALUE
+rhc_deferred_get_init(VALUE self, VALUE client, VALUE space, VALUE key)
+{
+    struct rhc_deferred_get* d = NULL;
+    struct hyperclient* c = NULL;
+    enum hyperdatatype datatype;
+    VALUE key_backing;
+    const char* space_cstr;
+    const char* key_cstr;
+    size_t key_sz;
+    VALUE ops;
+
+    rb_call_super(1, &client);
+    hyperclient_ruby_obj_to_backing(key, &datatype, &key_backing);
+    space_cstr = StringValueCStr(space);
+    key_cstr = rb_str2cstr(key, &key_sz);
+    Data_Get_Struct(self, struct rhc_deferred_get, d);
+    Data_Get_Struct(d->client, struct hyperclient, c);
+    d->reqid = hyperclient_get(c, space_cstr, key_cstr, key_sz,
+                               &d->status, &d->attrs, &d->attrs_sz);
+    check_reqid(d->reqid, d->status);
+    ops = rb_iv_get(d->client, "ops");
+    rb_hash_aset(ops, INT2NUM(d->reqid), self);
+    return self;
+}
+
+VALUE
+rhc_deferred_get_wait(VALUE self)
+{
+    struct rhc_deferred_get* d = NULL;
+
+    rb_call_super(0, NULL);
+    Data_Get_Struct(self, struct rhc_deferred_get, d);
+
+    if (d->status == HYPERCLIENT_SUCCESS)
+    {
+        return hyperclient_ruby_attrs_to_hash(d->attrs, d->attrs_sz);
+    }
+    else if (d->status == HYPERCLIENT_NOTFOUND)
+    {
+        return Qnil;
+    }
+    else
+    {
+        rhc_throw_hyperclient_exception(d->status, "");
+    }
+}
+
+/*************************** DeferredFromAttrs Class **************************/
+
+typedef int64_t (*hyperclient_simple_op)(struct hyperclient*,
+                                         const char*, const char*, size_t,
+                                         const struct hyperclient_attribute*, size_t,
+                                         enum hyperclient_returncode*);
+
+struct rhc_deferred_from_attrs
+{
+    RHC_DEFERRED;
+    hyperclient_simple_op op;
+    int cmped;
+};
+
+void
+rhc_deferred_from_attrs_free(struct rhc_deferred_from_attrs* tom)
+{
+    if (tom)
+    {
+        free(tom);
+    }
+}
+
+VALUE
+rhc_deferred_from_attrs_new(VALUE client, VALUE space, VALUE key, VALUE value,
+                            hyperclient_simple_op op)
+{
+    VALUE argv[5];
+    argv[0] = client;
+    argv[1] = space;
+    argv[2] = key;
+    argv[3] = value;
+    argv[4] = Data_Wrap_Struct(rb_cObject, NULL, NULL, op);
+    return rb_class_new_instance(5, argv, cdeferred_from_attrs);
+}
+
+VALUE
+rhc_deferred_from_attrs_alloc(VALUE class)
+{
+    VALUE tdata;
+    struct rhc_deferred_from_attrs* d = malloc(sizeof(struct rhc_deferred_from_attrs));
+
+    if (!d)
+    {
+        rb_raise(rb_eNoMemError, "failed to allocate memory");
+        return Qnil;
+    }
+
+    memset(d, 0, sizeof(struct rhc_deferred_from_attrs));
+    d->client = Qnil;
+    d->reqid = 0;
+    d->status = HYPERCLIENT_ZERO;
+    d->finished = 0;
+    d->op = NULL;
+    d->cmped = 0;
+    tdata = Data_Wrap_Struct(class, rhc_deferred_mark, rhc_deferred_from_attrs_free, d);
+    return tdata;
+}
+
+VALUE
+rhc_deferred_from_attrs_init(VALUE self, VALUE client, VALUE space, VALUE key, VALUE value, VALUE op)
+{
+    struct rhc_deferred_from_attrs* d = NULL;
+    struct hyperclient* c = NULL;
+    enum hyperdatatype datatype = HYPERDATATYPE_GARBAGE;
+    VALUE key_backing = Qnil;
+    const char* space_cstr = NULL;
+    const char* key_cstr = NULL;
+    size_t key_sz = 0;
+    VALUE backing = Qnil;
+    struct hyperclient_attribute* attrs = NULL;
+    size_t attrs_sz = 0;
+    VALUE ops = Qnil;
+
+    rb_call_super(1, &client);
+    hyperclient_ruby_obj_to_backing(key, &datatype, &key_backing);
+    space_cstr = StringValueCStr(space);
+    key_cstr = rb_str2cstr(key, &key_sz);
+    hyperclient_ruby_hash_to_attrs(value, &backing, &attrs, &attrs_sz);
+    Data_Get_Struct(self, struct rhc_deferred_from_attrs, d);
+    Data_Get_Struct(d->client, struct hyperclient, c);
+    Data_Get_Struct(op, hyperclient_simple_op, d->op);
+    d->reqid = d->op(c, space_cstr, key_cstr, key_sz, attrs, attrs_sz, &d->status);
+    check_reqid_key_attrs(d->reqid, d->status, attrs, attrs_sz);
+    ops = rb_iv_get(d->client, "ops");
+    rb_hash_aset(ops, INT2NUM(d->reqid), self);
+    return self;
+}
+
+VALUE
+rhc_deferred_from_attrs_wait(VALUE self)
+{
+    struct rhc_deferred_from_attrs* d = NULL;
+
+    rb_call_super(0, NULL);
+    Data_Get_Struct(self, struct rhc_deferred_from_attrs, d);
+
+    if (d->status == HYPERCLIENT_SUCCESS)
+    {
+        return Qtrue;
+    }
+    else if (d->cmped && d->status == HYPERCLIENT_CMPFAIL)
+    {
+        return Qfalse;
+    }
+    else
+    {
+        rhc_throw_hyperclient_exception(d->status, "");
+    }
+}
+
+/**************************** DeferredCondPut Class ***************************/
+
+struct rhc_deferred_condput
+{
+    RHC_DEFERRED;
+};
+
+void
+rhc_deferred_condput_free(struct rhc_deferred_from_attrs* tom)
+{
+    if (tom)
+    {
+        free(tom);
+    }
+}
+
+VALUE
+rhc_deferred_condput_new(VALUE client, VALUE space, VALUE key, VALUE condition, VALUE value)
+{
+    VALUE argv[5];
+    argv[0] = client;
+    argv[1] = space;
+    argv[2] = key;
+    argv[3] = condition;
+    argv[4] = value;
+    return rb_class_new_instance(5, argv, cdeferred_condput);
+}
+
+VALUE
+rhc_deferred_condput_alloc(VALUE class)
+{
+    VALUE tdata;
+    struct rhc_deferred_condput* d = malloc(sizeof(struct rhc_deferred_condput));
+
+    if (!d)
+    {
+        rb_raise(rb_eNoMemError, "failed to allocate memory");
+        return Qnil;
+    }
+
+    memset(d, 0, sizeof(struct rhc_deferred_condput));
+    d->client = Qnil;
+    d->reqid = 0;
+    d->status = HYPERCLIENT_ZERO;
+    d->finished = 0;
+    tdata = Data_Wrap_Struct(class, rhc_deferred_mark, rhc_deferred_condput_free, d);
+    return tdata;
+}
+
+VALUE
+rhc_deferred_condput_init(VALUE self, VALUE client, VALUE space, VALUE key, VALUE condition, VALUE value)
+{
+    struct rhc_deferred_condput* d = NULL;
+    struct hyperclient* c = NULL;
+    enum hyperdatatype datatype = HYPERDATATYPE_GARBAGE;
+    VALUE key_backing = Qnil;
+    const char* space_cstr = NULL;
+    const char* key_cstr = NULL;
+    size_t key_sz = 0;
+    VALUE backinga = Qnil;
+    VALUE backingc = Qnil;
+    struct hyperclient_attribute* attrs = NULL;
+    size_t attrs_sz = 0;
+    struct hyperclient_attribute* condattrs = NULL;
+    size_t condattrs_sz = 0;
+    VALUE ops = Qnil;
+
+    rb_call_super(1, &client);
+    hyperclient_ruby_obj_to_backing(key, &datatype, &key_backing);
+    space_cstr = StringValueCStr(space);
+    key_cstr = rb_str2cstr(key, &key_sz);
+    hyperclient_ruby_hash_to_attrs(value, &backinga, &attrs, &attrs_sz);
+    hyperclient_ruby_hash_to_attrs(condition, &backingc, &condattrs, &condattrs_sz);
+    Data_Get_Struct(self, struct rhc_deferred_condput, d);
+    Data_Get_Struct(d->client, struct hyperclient, c);
+    d->reqid = hyperclient_condput(c, space_cstr, key_cstr, key_sz, condattrs, condattrs_sz, attrs, attrs_sz, &d->status);
+    check_reqid_key_attrs2(d->reqid, d->status, condattrs, condattrs_sz, attrs, attrs_sz);
+    ops = rb_iv_get(d->client, "ops");
+    rb_hash_aset(ops, INT2NUM(d->reqid), self);
+    return self;
+}
+
+VALUE
+rhc_deferred_condput_wait(VALUE self)
+{
+    struct rhc_deferred_condput* d = NULL;
+
+    rb_call_super(0, NULL);
+    Data_Get_Struct(self, struct rhc_deferred_condput, d);
+
+    if (d->status == HYPERCLIENT_SUCCESS)
+    {
+        return Qtrue;
+    }
+    else if (d->status == HYPERCLIENT_CMPFAIL)
+    {
+        return Qfalse;
+    }
+    else
+    {
+        rhc_throw_hyperclient_exception(d->status, "");
+    }
+}
+
+/**************************** DeferredDel Class ****************************/
+
+struct rhc_deferred_del
+{
+    RHC_DEFERRED;
+};
+
+void
+rhc_deferred_del_free(struct rhc_deferred_del* tom)
+{
+    if (tom)
+    {
+        free(tom);
+    }
+}
+
+VALUE
+rhc_deferred_del_new(VALUE client, VALUE space, VALUE key)
+{
+    VALUE argv[3];
+    argv[0] = client;
+    argv[1] = space;
+    argv[2] = key;
+    return rb_class_new_instance(4, argv, cdeferred_del);
+}
+
+VALUE
+rhc_deferred_del_alloc(VALUE class)
+{
+    VALUE tdata;
+    struct rhc_deferred_del* d = malloc(sizeof(struct rhc_deferred_del));
+
+    if (!d)
+    {
+        rb_raise(rb_eNoMemError, "failed to allocate memory");
+        return Qnil;
+    }
+
+    memset(d, 0, sizeof(struct rhc_deferred_del));
+    d->client = Qnil;
+    d->reqid = 0;
+    d->status = HYPERCLIENT_ZERO;
+    d->finished = 0;
+    tdata = Data_Wrap_Struct(class, rhc_deferred_mark, rhc_deferred_del_free, d);
+    return tdata;
+}
+
+VALUE
+rhc_deferred_del_init(VALUE self, VALUE client, VALUE space, VALUE key, VALUE value)
+{
+    struct rhc_deferred_del* d = NULL;
+    struct hyperclient* c = NULL;
+    enum hyperdatatype datatype = HYPERDATATYPE_GARBAGE;
+    VALUE key_backing = Qnil;
+    const char* space_cstr = NULL;
+    const char* key_cstr = NULL;
+    size_t key_sz = 0;
+    VALUE ops = Qnil;
+
+    rb_call_super(1, &client);
+    hyperclient_ruby_obj_to_backing(key, &datatype, &key_backing);
+    space_cstr = StringValueCStr(space);
+    key_cstr = rb_str2cstr(key, &key_sz);
+    Data_Get_Struct(self, struct rhc_deferred_del, d);
+    Data_Get_Struct(d->client, struct hyperclient, c);
+    d->reqid = hyperclient_del(c, space_cstr, key_cstr, key_sz, &d->status);
+    check_reqid(d->reqid, d->status);
+    ops = rb_iv_get(d->client, "ops");
+    rb_hash_aset(ops, INT2NUM(d->reqid), self);
+    return self;
+}
+
+VALUE
+rhc_deferred_del_wait(VALUE self)
+{
+    struct rhc_deferred_del* d = NULL;
+
+    rb_call_super(0, NULL);
+    Data_Get_Struct(self, struct rhc_deferred_del, d);
+
+    if (d->status == HYPERCLIENT_SUCCESS)
+    {
+        return Qtrue;
+    }
+    if (d->status == HYPERCLIENT_NOTFOUND)
+    {
+        return Qfalse;
+    }
+    else
+    {
+        rhc_throw_hyperclient_exception(d->status, "");
+    }
+}
+
+/***************************** DeferredMapOp Class ****************************/
+
+typedef int64_t (*hyperclient_map_op)(struct hyperclient*,
+                                      const char*, const char*, size_t,
+                                      const struct hyperclient_map_attribute*, size_t,
+                                      enum hyperclient_returncode*);
+
+struct rhc_deferred_map_op
+{
+    RHC_DEFERRED;
+    hyperclient_map_op op;
+};
+
+void
+rhc_deferred_map_op_free(struct rhc_deferred_map_op* tom)
+{
+    if (tom)
+    {
+        free(tom);
+    }
+}
+
+VALUE
+rhc_deferred_map_op_new(VALUE client, VALUE space, VALUE key, VALUE value, hyperclient_map_op op)
+{
+    VALUE argv[5];
+    argv[0] = client;
+    argv[1] = space;
+    argv[2] = key;
+    argv[3] = value;
+    argv[4] = Data_Wrap_Struct(rb_cObject, NULL, NULL, op);
+    return rb_class_new_instance(5, argv, cdeferred_map_op);
+}
+
+VALUE
+rhc_deferred_map_op_alloc(VALUE class)
+{
+    VALUE tdata;
+    struct rhc_deferred_map_op* d = malloc(sizeof(struct rhc_deferred_map_op));
+
+    if (!d)
+    {
+        rb_raise(rb_eNoMemError, "failed to allocate memory");
+        return Qnil;
+    }
+
+    memset(d, 0, sizeof(struct rhc_deferred_map_op));
+    d->client = Qnil;
+    d->reqid = 0;
+    d->status = HYPERCLIENT_ZERO;
+    d->finished = 0;
+    d->op = NULL;
+    tdata = Data_Wrap_Struct(class, rhc_deferred_mark, rhc_deferred_map_op_free, d);
+    return tdata;
+}
+
+VALUE
+rhc_deferred_map_op_init(VALUE self, VALUE client, VALUE space, VALUE key, VALUE value, VALUE op)
+{
+    struct rhc_deferred_map_op* d = NULL;
+    struct hyperclient* c = NULL;
+    enum hyperdatatype datatype = HYPERDATATYPE_GARBAGE;
+    VALUE key_backing = Qnil;
+    const char* space_cstr = NULL;
+    const char* key_cstr = NULL;
+    size_t key_sz = 0;
+    VALUE backing = Qnil;
+    struct hyperclient_map_attribute* attrs = NULL;
+    size_t attrs_sz = 0;
+    VALUE ops = Qnil;
+
+    rb_call_super(1, &client);
+    hyperclient_ruby_obj_to_backing(key, &datatype, &key_backing);
+    space_cstr = StringValueCStr(space);
+    key_cstr = rb_str2cstr(key, &key_sz);
+    hyperclient_ruby_hash_to_map_attrs(value, &backing, &attrs, &attrs_sz);
+    Data_Get_Struct(self, struct rhc_deferred_map_op, d);
+    Data_Get_Struct(d->client, struct hyperclient, c);
+    Data_Get_Struct(op, hyperclient_map_op, d->op);
+    d->reqid = d->op(c, space_cstr, key_cstr, key_sz, attrs, attrs_sz, &d->status);
+    check_reqid_key_map_attrs(d->reqid, d->status, attrs, attrs_sz);
+    ops = rb_iv_get(d->client, "ops");
+    rb_hash_aset(ops, INT2NUM(d->reqid), self);
+    return self;
+}
+
+VALUE
+rhc_deferred_map_op_wait(VALUE self)
+{
+    struct rhc_deferred_map_op* d = NULL;
+
+    rb_call_super(0, NULL);
+    Data_Get_Struct(self, struct rhc_deferred_map_op, d);
+
+    if (d->status == HYPERCLIENT_SUCCESS)
+    {
+        return Qtrue;
+    }
+    else
+    {
+        rhc_throw_hyperclient_exception(d->status, "");
+    }
+}
+
+/****************************** HyperClient Class *****************************/
 
 VALUE
 rhc_new(VALUE class, VALUE host, VALUE port)
 {
     VALUE argv[2];
     VALUE tdata;
-    struct hyperclient* hc = hyperclient_create(STR2CSTR(host), NUM2UINT(port));
+    struct hyperclient* hc = hyperclient_create(StringValueCStr(host), NUM2UINT(port));
 
     if (!hc)
     {
@@ -29,811 +839,303 @@ rhc_new(VALUE class, VALUE host, VALUE port)
 VALUE
 rhc_init(VALUE self, VALUE host, VALUE port)
 {
+    VALUE ops;
+    ops = rb_hash_new();
+    if (ops == Qnil) return Qnil;
+    rb_iv_set(self, "ops", ops);
     return self;
 }
+
+#define RHC_SYNC0(X) \
+    VALUE \
+    rhc_ ## X(VALUE self, VALUE space, VALUE key) \
+    { \
+        VALUE async; \
+        async = rb_funcall(self, rb_intern("async_" hdxstr(X)), 2, space, key); \
+        return rb_funcall(async, rb_intern("wait"), 0); \
+    }
+#define RHC_SYNC1(X) \
+    VALUE \
+    rhc_ ## X(VALUE self, VALUE space, VALUE key, VALUE value1) \
+    { \
+        VALUE async; \
+        async = rb_funcall(self, rb_intern("async_" hdxstr(X)), 3, space, key, value1); \
+        return rb_funcall(async, rb_intern("wait"), 0); \
+    }
+#define RHC_SYNC2(X) \
+    VALUE \
+    rhc_ ## X(VALUE self, VALUE space, VALUE key, VALUE value1, VALUE value2) \
+    { \
+        VALUE async; \
+        async = rb_funcall(self, rb_intern("async_" hdxstr(X)), 4, space, key, value1, value2); \
+        return rb_funcall(async, rb_intern("wait"), 0); \
+    }
+
+RHC_SYNC0(get)
+RHC_SYNC1(put)
+RHC_SYNC1(put_if_not_exist)
+RHC_SYNC2(condput)
+RHC_SYNC0(del)
+RHC_SYNC1(atomic_add)
+RHC_SYNC1(atomic_sub)
+RHC_SYNC1(atomic_mul)
+RHC_SYNC1(atomic_div)
+RHC_SYNC1(atomic_mod)
+RHC_SYNC1(atomic_and)
+RHC_SYNC1(atomic_or)
+RHC_SYNC1(atomic_xor)
+RHC_SYNC1(string_prepend)
+RHC_SYNC1(string_append)
+RHC_SYNC1(list_lpush)
+RHC_SYNC1(list_rpush)
+RHC_SYNC1(set_add)
+RHC_SYNC1(set_remove)
+RHC_SYNC1(set_intersect)
+RHC_SYNC1(set_union)
+RHC_SYNC1(map_add)
+RHC_SYNC1(map_remove)
+RHC_SYNC1(map_atomic_add)
+RHC_SYNC1(map_atomic_sub)
+RHC_SYNC1(map_atomic_mul)
+RHC_SYNC1(map_atomic_div)
+RHC_SYNC1(map_atomic_mod)
+RHC_SYNC1(map_atomic_and)
+RHC_SYNC1(map_atomic_or)
+RHC_SYNC1(map_atomic_xor)
+RHC_SYNC1(map_string_prepend)
+RHC_SYNC1(map_string_append)
+RHC_SYNC0(group_del)
+RHC_SYNC1(count)
+
+// XXX
+// def search(self, bytes space, dict predicate):
+//     return Search(self, space, predicate)
+//
+// def sorted_search(self, bytes space, dict predicate, bytes sort_by, long limit, bytes compare):
+//     return SortedSearch(self, space, predicate, sort_by, limit, compare)
+
+#define RHC_ASYNC0_NOFP(X, D) \
+    VALUE \
+    rhc_async_ ## X(VALUE self, VALUE space, VALUE key) \
+    { \
+        return D(self, space, key); \
+    }
+
+#define RHC_ASYNC2_NOFP(X, D) \
+    VALUE \
+    rhc_async_ ## X(VALUE self, VALUE space, VALUE key, VALUE value1, VALUE value2) \
+    { \
+        return D(self, space, key, value1, value2); \
+    }
+
+#define RHC_ASYNC_FROM_ATTRS(X) \
+    VALUE \
+    rhc_async_ ## X(VALUE self, VALUE space, VALUE key, VALUE value) \
+    { \
+        VALUE d; \
+        d = rhc_deferred_from_attrs_new(self, space, key, value, hyperclient_ ## X); \
+        return d; \
+    }
+
+#define RHC_ASYNC_MAP_OP(X) \
+    VALUE \
+    rhc_async_ ## X(VALUE self, VALUE space, VALUE key, VALUE value) \
+    { \
+        VALUE d; \
+        d = rhc_deferred_map_op_new(self, space, key, value, hyperclient_ ## X); \
+        return d; \
+    }
+
+RHC_ASYNC0_NOFP(get, rhc_deferred_get_new)
+RHC_ASYNC_FROM_ATTRS(put)
+VALUE
+rhc_async_put_if_not_exist(VALUE self, VALUE space, VALUE key, VALUE value)
+{
+    VALUE d;
+    struct rhc_deferred_from_attrs* p;
+    d = rhc_deferred_from_attrs_new(self, space, key, value, hyperclient_put_if_not_exist);
+    Data_Get_Struct(d, struct rhc_deferred_from_attrs, p);
+    p->cmped = 1;
+    return d;
+}
+RHC_ASYNC2_NOFP(condput, rhc_deferred_condput_new)
+RHC_ASYNC0_NOFP(del, rhc_deferred_del_new)
+
+RHC_ASYNC_FROM_ATTRS(atomic_add)
+RHC_ASYNC_FROM_ATTRS(atomic_sub)
+RHC_ASYNC_FROM_ATTRS(atomic_mul)
+RHC_ASYNC_FROM_ATTRS(atomic_div)
+RHC_ASYNC_FROM_ATTRS(atomic_mod)
+RHC_ASYNC_FROM_ATTRS(atomic_and)
+RHC_ASYNC_FROM_ATTRS(atomic_or)
+RHC_ASYNC_FROM_ATTRS(atomic_xor)
+RHC_ASYNC_FROM_ATTRS(string_prepend)
+RHC_ASYNC_FROM_ATTRS(string_append)
+RHC_ASYNC_FROM_ATTRS(list_lpush)
+RHC_ASYNC_FROM_ATTRS(list_rpush)
+RHC_ASYNC_FROM_ATTRS(set_add)
+RHC_ASYNC_FROM_ATTRS(set_remove)
+RHC_ASYNC_FROM_ATTRS(set_intersect)
+RHC_ASYNC_FROM_ATTRS(set_union)
+
+RHC_ASYNC_MAP_OP(map_add)
+RHC_ASYNC_MAP_OP(map_remove)
+RHC_ASYNC_MAP_OP(map_atomic_add)
+RHC_ASYNC_MAP_OP(map_atomic_sub)
+RHC_ASYNC_MAP_OP(map_atomic_mul)
+RHC_ASYNC_MAP_OP(map_atomic_div)
+RHC_ASYNC_MAP_OP(map_atomic_mod)
+RHC_ASYNC_MAP_OP(map_atomic_and)
+RHC_ASYNC_MAP_OP(map_atomic_or)
+RHC_ASYNC_MAP_OP(map_atomic_xor)
+RHC_ASYNC_MAP_OP(map_string_prepend)
+RHC_ASYNC_MAP_OP(map_string_append)
+
+//RHC_ASYNC(group_del, rhc_deferred_group_del_new)
+//RHC_ASYNC(count, rhc_deferred_count_new)
+
+
+VALUE
+rhc_loop(VALUE self)
+{
+    struct hyperclient* c;
+    enum hyperclient_returncode rc;
+    int64_t ret;
+    VALUE ops;
+    VALUE op;
+
+    Data_Get_Struct(self, struct hyperclient, c);
+    ret = hyperclient_loop(c, -1, &rc);
+
+    if (ret < 0)
+    {
+        rhc_throw_hyperclient_exception(rc, "");
+    }
+    else
+    {
+        ops = rb_iv_get(self, "ops");
+        op = rb_hash_lookup(ops, INT2NUM(ret));
+        rb_funcall(op, rb_intern("callback"), 0);
+        return op;
+    }
+}
+
+/****************************** Initialize Things *****************************/
 
 void
 Init_hyperclient()
 {
+    rb_require("set");
+
     chyperclient = rb_define_class("HyperClient", rb_cObject);
     rb_define_singleton_method(chyperclient, "new", rhc_new, 2);
     rb_define_method(chyperclient, "initialize", rhc_init, 2);
+    rb_define_method(chyperclient, "loop", rhc_loop, 0);
+
+    rb_define_method(chyperclient, "get", rhc_get, 2);
+    rb_define_method(chyperclient, "put", rhc_put, 3);
+    rb_define_method(chyperclient, "put_if_not_exist", rhc_put_if_not_exist, 3);
+    rb_define_method(chyperclient, "condput", rhc_condput, 4);
+    rb_define_method(chyperclient, "del", rhc_del, 2);
+    rb_define_method(chyperclient, "atomic_add", rhc_atomic_add, 3);
+    rb_define_method(chyperclient, "atomic_sub", rhc_atomic_sub, 3);
+    rb_define_method(chyperclient, "atomic_mul", rhc_atomic_mul, 3);
+    rb_define_method(chyperclient, "atomic_div", rhc_atomic_div, 3);
+    rb_define_method(chyperclient, "atomic_mod", rhc_atomic_mod, 3);
+    rb_define_method(chyperclient, "atomic_and", rhc_atomic_and, 3);
+    rb_define_method(chyperclient, "atomic_or", rhc_atomic_or, 3);
+    rb_define_method(chyperclient, "atomic_xor", rhc_atomic_xor, 3);
+    rb_define_method(chyperclient, "string_prepend", rhc_string_prepend, 3);
+    rb_define_method(chyperclient, "string_append", rhc_string_append, 3);
+    rb_define_method(chyperclient, "list_lpush", rhc_list_lpush, 3);
+    rb_define_method(chyperclient, "list_rpush", rhc_list_rpush, 3);
+    rb_define_method(chyperclient, "set_add", rhc_set_add, 3);
+    rb_define_method(chyperclient, "set_remove", rhc_set_remove, 3);
+    rb_define_method(chyperclient, "set_intersect", rhc_set_intersect, 3);
+    rb_define_method(chyperclient, "set_union", rhc_set_union, 3);
+    rb_define_method(chyperclient, "map_add", rhc_map_add, 3);
+    rb_define_method(chyperclient, "map_remove", rhc_map_remove, 3);
+    rb_define_method(chyperclient, "map_atomic_add", rhc_map_atomic_add, 3);
+    rb_define_method(chyperclient, "map_atomic_sub", rhc_map_atomic_sub, 3);
+    rb_define_method(chyperclient, "map_atomic_mul", rhc_map_atomic_mul, 3);
+    rb_define_method(chyperclient, "map_atomic_div", rhc_map_atomic_div, 3);
+    rb_define_method(chyperclient, "map_atomic_mod", rhc_map_atomic_mod, 3);
+    rb_define_method(chyperclient, "map_atomic_and", rhc_map_atomic_and, 3);
+    rb_define_method(chyperclient, "map_atomic_or", rhc_map_atomic_or, 3);
+    rb_define_method(chyperclient, "map_atomic_xor", rhc_map_atomic_xor, 3);
+    rb_define_method(chyperclient, "map_string_prepend", rhc_map_string_prepend, 3);
+    rb_define_method(chyperclient, "map_string_append", rhc_map_string_append, 3);
+    rb_define_method(chyperclient, "group_del", rhc_group_del, 2);
+    rb_define_method(chyperclient, "count", rhc_count, 3);
+
+    rb_define_method(chyperclient, "async_get", rhc_async_get, 2);
+    rb_define_method(chyperclient, "async_put", rhc_async_put, 3);
+    rb_define_method(chyperclient, "async_put_if_not_exist", rhc_async_put_if_not_exist, 3);
+    rb_define_method(chyperclient, "async_condput", rhc_async_condput, 4);
+    rb_define_method(chyperclient, "async_del", rhc_async_del, 2);
+    rb_define_method(chyperclient, "async_atomic_add", rhc_async_atomic_add, 3);
+    rb_define_method(chyperclient, "async_atomic_sub", rhc_async_atomic_sub, 3);
+    rb_define_method(chyperclient, "async_atomic_mul", rhc_async_atomic_mul, 3);
+    rb_define_method(chyperclient, "async_atomic_div", rhc_async_atomic_div, 3);
+    rb_define_method(chyperclient, "async_atomic_mod", rhc_async_atomic_mod, 3);
+    rb_define_method(chyperclient, "async_atomic_and", rhc_async_atomic_and, 3);
+    rb_define_method(chyperclient, "async_atomic_or", rhc_async_atomic_or, 3);
+    rb_define_method(chyperclient, "async_atomic_xor", rhc_async_atomic_xor, 3);
+    rb_define_method(chyperclient, "async_string_prepend", rhc_async_string_prepend, 3);
+    rb_define_method(chyperclient, "async_string_append", rhc_async_string_append, 3);
+    rb_define_method(chyperclient, "async_list_lpush", rhc_async_list_lpush, 3);
+    rb_define_method(chyperclient, "async_list_rpush", rhc_async_list_rpush, 3);
+    rb_define_method(chyperclient, "async_set_add", rhc_async_set_add, 3);
+    rb_define_method(chyperclient, "async_set_remove", rhc_async_set_remove, 3);
+    rb_define_method(chyperclient, "async_set_intersect", rhc_async_set_intersect, 3);
+    rb_define_method(chyperclient, "async_set_union", rhc_async_set_union, 3);
+    rb_define_method(chyperclient, "async_map_add", rhc_async_map_add, 3);
+    rb_define_method(chyperclient, "async_map_remove", rhc_async_map_remove, 3);
+    rb_define_method(chyperclient, "async_map_atomic_add", rhc_async_map_atomic_add, 3);
+    rb_define_method(chyperclient, "async_map_atomic_sub", rhc_async_map_atomic_sub, 3);
+    rb_define_method(chyperclient, "async_map_atomic_mul", rhc_async_map_atomic_mul, 3);
+    rb_define_method(chyperclient, "async_map_atomic_div", rhc_async_map_atomic_div, 3);
+    rb_define_method(chyperclient, "async_map_atomic_mod", rhc_async_map_atomic_mod, 3);
+    rb_define_method(chyperclient, "async_map_atomic_and", rhc_async_map_atomic_and, 3);
+    rb_define_method(chyperclient, "async_map_atomic_or", rhc_async_map_atomic_or, 3);
+    rb_define_method(chyperclient, "async_map_atomic_xor", rhc_async_map_atomic_xor, 3);
+    rb_define_method(chyperclient, "async_map_string_prepend", rhc_async_map_string_prepend, 3);
+    rb_define_method(chyperclient, "async_map_string_append", rhc_async_map_string_append, 3);
+    //rb_define_method(chyperclient, "async_group_del", rhc_async_group_del, 2);
+    //rb_define_method(chyperclient, "async_count", rhc_async_count, 3);
+
+    cexcept = rb_define_class_under(chyperclient, "HyperClientException", rb_eStandardError);
+    rb_define_attr(cexcept, "status", 1, 0);
+    rb_define_attr(cexcept, "symbol", 1, 0);
+
+    cdeferred = rb_define_class_under(chyperclient, "Deferred", rb_cObject);
+    rb_define_alloc_func(cdeferred, rhc_deferred_alloc);
+    rb_define_method(cdeferred, "initialize", rhc_deferred_init, 1);
+    rb_define_method(cdeferred, "callback", rhc_deferred_callback, 0);
+    rb_define_method(cdeferred, "wait", rhc_deferred_wait, 0);
+
+    cdeferred_get = rb_define_class_under(chyperclient, "DeferredGet", cdeferred);
+    rb_define_alloc_func(cdeferred_get, rhc_deferred_get_alloc);
+    rb_define_method(cdeferred_get, "initialize", rhc_deferred_get_init, 3);
+    rb_define_method(cdeferred_get, "wait", rhc_deferred_get_wait, 0);
+
+    cdeferred_from_attrs = rb_define_class_under(chyperclient, "DeferredFromAttrs", cdeferred);
+    rb_define_alloc_func(cdeferred_from_attrs, rhc_deferred_from_attrs_alloc);
+    rb_define_method(cdeferred_from_attrs, "initialize", rhc_deferred_from_attrs_init, 5);
+    rb_define_method(cdeferred_from_attrs, "wait", rhc_deferred_from_attrs_wait, 0);
+
+    cdeferred_condput = rb_define_class_under(chyperclient, "DeferredCondPut", cdeferred);
+    rb_define_alloc_func(cdeferred_condput, rhc_deferred_condput_alloc);
+    rb_define_method(cdeferred_condput, "initialize", rhc_deferred_condput_init, 5);
+    rb_define_method(cdeferred_condput, "wait", rhc_deferred_condput_wait, 0);
+
+    cdeferred_del = rb_define_class_under(chyperclient, "DeferredDel", cdeferred);
+    rb_define_alloc_func(cdeferred_del, rhc_deferred_del_alloc);
+    rb_define_method(cdeferred_del, "initialize", rhc_deferred_del_init, 4);
+    rb_define_method(cdeferred_del, "wait", rhc_deferred_del_wait, 0);
+
+    cdeferred_map_op = rb_define_class_under(chyperclient, "DeferredMapOp", cdeferred);
+    rb_define_alloc_func(cdeferred_map_op, rhc_deferred_map_op_alloc);
+    rb_define_method(cdeferred_map_op, "initialize", rhc_deferred_map_op_init, 5);
+    rb_define_method(cdeferred_map_op, "wait", rhc_deferred_map_op_wait, 0);
 }
-
-#if 0
-#include "hyperclient/hyperclient.h"
-#include "ruby.h"
-#include <stdio.h>
-#include <endian.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <inttypes.h>
-
-
-struct ruby_hyperclient{
-        struct hyperclient* client;
-        struct hyperclient_attribute** attrs;
-        size_t *attrs_size;
-        enum hyperclient_returncode* ret;
-        int finished;
-        int op;
-	int64_t val;
-};
-
-VALUE hash = Qnil;
-VALUE hash_op = Qnil;
-VALUE chyperclient;
-
-
-void ruby_exception(char* exception)
-{
-        rb_raise(rb_eArgError, exception);
-}
-
-void raise(enum hyperclient_returncode ret)
-{
-	switch(ret)
-	{
-
-                case HYPERCLIENT_NOTFOUND: 
-			ruby_exception("Not Found");
-			break;
-		case HYPERCLIENT_SEARCHDONE: 
-			ruby_exception("Search Done");
-			break;
-		case HYPERCLIENT_CMPFAIL: 
-			ruby_exception("Conditional Operation Did Not Match Object");
-			break;
-		case HYPERCLIENT_UNKNOWNSPACE: 
-			ruby_exception("Unknown Space");
-			break;
-		case HYPERCLIENT_COORDFAIL: 
-			ruby_exception("Coordinator Failure");
-			break;	
-                case HYPERCLIENT_SERVERERROR: 
-			ruby_exception("Server Error");
-			break;
-                case HYPERCLIENT_CONNECTFAIL: 
-			ruby_exception("Connection Failure");
-			break;
-                case HYPERCLIENT_DISCONNECT: 
-			ruby_exception("Connection Reset");
-			break;
-                case HYPERCLIENT_RECONFIGURE: 
-			ruby_exception("Reconfiguration");
-			break;
-                case HYPERCLIENT_LOGICERROR: 
-			ruby_exception("Logic Error (file a bug)");
-			break;
-                case HYPERCLIENT_TIMEOUT:
-			ruby_exception("Timeout");
-			break;
-                case HYPERCLIENT_UNKNOWNATTR: 
-			ruby_exception("Unknown attribute");
-			break;
-                case HYPERCLIENT_DUPEATTR: 
-			ruby_exception("Duplicate attribute ");
-			break;
-                case HYPERCLIENT_SEEERRNO: 
-			ruby_exception("See ERRNO");
-			break;
-                case HYPERCLIENT_NONEPENDING: 
-			ruby_exception("None pending");
-			break;
-                case HYPERCLIENT_DONTUSEKEY: 
-			ruby_exception("Do not specify the key in a search predicate and do not redundantly specify the key for an insert");
-			break;
-                case HYPERCLIENT_WRONGTYPE: 
-			ruby_exception("Attribute has the wrong type");
-			break;
-                case HYPERCLIENT_EXCEPTION: 
-			ruby_exception("Internal Error (file a bug)");
-			break;
-	}
-}
-
-
-void destroy_attrs(struct hyperclient_attribute** a, size_t size)
-{
-	int i;
-	for(i=0;i<size;i++)
-	{
-		free((void *)(*a)[i].value);
-	}
-	return;
-}
-
-
-void hash_insert(VALUE* hash, VALUE key, VALUE val)
-{
-        if(*hash == Qnil)
-        {
-                *hash = rb_hash_new();
-	}
-        rb_hash_aset(*hash, key, val);
-	
-}
-
-struct ruby_hyperclient* copy_client(VALUE self)
-{
-	struct ruby_hyperclient *r, *r1;
-	Data_Get_Struct(self, struct ruby_hyperclient, r);
-	r1 = ALLOC(struct ruby_hyperclient);
-	if(r1 == NULL)
-	{
-		rb_raise(rb_eArgError,"Memory Error");
-		return NULL;
-	}
-	memcpy(r1, r, sizeof(struct ruby_hyperclient));
-	if(r1->client == NULL)
-	{
-		rb_raise(rb_eArgError,"Client Error");
-	}
-	return r1;
-}
-
-VALUE i64tonum(int64_t val)
-{
-	return LL2NUM((long long)val);
-}
-
-int ary_len(VALUE array)
-{
-	VALUE a, b;
-	int i = 0;
-	a = rb_ary_new();
-	while((b=rb_ary_pop(array)) != Qnil)
-	{
-		i++;
-		rb_ary_push(b,a);
-	}
-	while((b=rb_ary_pop(a)) != Qnil)
-	{
-		rb_ary_push(b,array);
-	}
-	return i;
-}	
-
-char* copy_n(const char* str, int n)
-{
-        int i;
-        char * str1;
-	str1 = ALLOC_N(char, n+1);
-        for(i=0;i<n;i++)
-                str1[i] = str[i];
-        str1[i] = '\0';
-        return str1;
-}
-
-VALUE attrs_to_array(struct hyperclient_attribute* attrs, size_t attrs_size)
-{
-        VALUE arr, Key, value, a;
-        int i;
-        int64_t num=0;
-        char* strvalue;
-        arr = rb_ary_new();
-        for(i=0; i<attrs_size; i++)
-        {
-                a = rb_ary_new();
-                Key = rb_str_new2(attrs[i].attr);
-                rb_ary_push(a,Key);
-                if(attrs[i].datatype == HYPERDATATYPE_STRING)
-                {
-			if(attrs[i].value!=NULL)
-	                        strvalue = copy_n(attrs[i].value, attrs[i].value_sz);
-                        value = rb_str_new2(strvalue);
-			free(strvalue);
-                }
-                else if(attrs[i].datatype == HYPERDATATYPE_INT64)
-                {
-                        if(attrs[i].value!=NULL)
-                        {
-				if(attrs[i].value_sz == 0)
-				{
-					value = Qnil;
-				}
-				else
-				{
-                                	memmove(&num, attrs[i].value, attrs[i].value_sz);
-                                	num = le64toh(num);
-                                	value = i64tonum(num);
-				}
-                        }
-                        else
-                        {
-                                value = Qnil;
-                        }
-                }
-                else
-                {
-			hyperclient_destroy_attrs(attrs, attrs_size);
-			raise(HYPERCLIENT_WRONGTYPE);
-			return Qnil;
-                }
-                rb_ary_push(a,value);
-                rb_ary_push(arr, a);
-        }
-	hyperclient_destroy_attrs(attrs, attrs_size);
-        return arr;
-}
-
-void array_to_attrs(VALUE attrs, int isinc, struct hyperclient_attribute** a, size_t len )
-{
-        int i;
-        int64_t num;
-        VALUE key, value;
-
-        for(i=0;i<len;i++)
-        {
-                key = RARRAY(RARRAY(attrs)->ptr[i])->ptr[0];
-                value = RARRAY(RARRAY(attrs)->ptr[i])->ptr[1];
-                (*a)[i].attr = STR2CSTR(key);
-                if(FIXNUM_P(value))
-                {
-                        num = (int64_t)NUM2LL(value);
-                        if(!(isinc))
-                                num = -num;
-                        num = htole64(num);
-			(*a)[i].value  = ALLOC_N(char, 8);
-                        memmove((void *)(*a)[i].value, &num, (size_t)8); 
-			(*a)[i].value_sz = 8;
-                        (*a)[i].datatype = HYPERDATATYPE_INT64;
-	        }
-                else
-                {
-                        (*a)[i].value = STR2CSTR(value);
-                        (*a)[i].value_sz = strlen((*a)[i].value);
-                        (*a)[i].datatype = HYPERDATATYPE_STRING;
-                }
-        }
-        return;
-}
-
-VALUE hc_wait(VALUE self)
-{
-	int64_t val;
-	struct ruby_hyperclient *r;
-	VALUE attrs, attrs_array, new_attrs;
-	VALUE op, new_op;
-	VALUE attr_val;
-	Data_Get_Struct(self, struct ruby_hyperclient, r);
-	if(r == NULL || r->client == NULL)
-	{
-		rb_raise(rb_eArgError, "Client Error\n");
-		return Qnil;
-	}
-	if(hash == Qnil)
-	{
-		return Qnil;
-	}
-	attrs = rb_hash_lookup(hash, i64tonum(r->val));
-	op = rb_hash_lookup(hash_op, i64tonum(r->val));
-	if(op == Qnil)
-	{
-		return Qnil;
-	}
-	if(attrs != Qnil)
-	{
-		attr_val = rb_ary_shift(attrs);
-		if(attr_val!= Qnil)	
-		{
-			hash_insert(&hash, i64tonum(r->val), attrs);
-			return attr_val;
-		}
-		else if(NUM2INT(op) == 0)
-		{
-			rb_hash_delete(hash_op, i64tonum(r->val));
-			rb_hash_delete(hash, i64tonum(r->val));
-			return Qnil;
-		}
-	}	
-	do
-	{
-		val=hyperclient_loop(r->client, -1, r->ret);
-		if(*(r->ret) != HYPERCLIENT_SUCCESS && *(r->ret) != HYPERCLIENT_NOTFOUND && *(r->ret) != HYPERCLIENT_CMPFAIL && *(r->ret) != HYPERCLIENT_SEARCHDONE)
-		{
-			raise(*(r->ret));
-			return Qnil;
-		}
-		attrs_array = rb_hash_lookup(hash, i64tonum(val));
-		new_op = rb_hash_lookup(hash_op, i64tonum(val));
-		if(attrs_array == Qnil)
-		{
-			attrs_array = rb_ary_new();
-		}
-		if(NUM2INT(new_op) == 1)
-		{	
-			if(*(r->ret) == HYPERCLIENT_SUCCESS)
-			{	
-				hash_insert(&hash_op, i64tonum(val), INT2NUM(0));
-				new_attrs = attrs_to_array(*(r->attrs), *(r->attrs_size));
-				rb_ary_unshift(attrs_array, new_attrs);
-			}
-			else
-			{
-				rb_ary_unshift(attrs_array, Qfalse);
-			}
-			hash_insert(&hash, i64tonum(val), attrs_array);
-			
-		} 
-		else if(NUM2INT(new_op) == 7)
-		{
-			if(*(r->ret) == HYPERCLIENT_SUCCESS)
-			{
-				new_attrs = attrs_to_array(*(r->attrs), *(r->attrs_size));
-				rb_ary_unshift(attrs_array, new_attrs);	
-			}
-			else if(*(r->ret) == HYPERCLIENT_SEARCHDONE)
-                        {
-        	                hash_insert(&hash_op, i64tonum(r->val), INT2NUM(0));
-                        }
-			else
-			{
-				rb_ary_unshift(attrs_array, Qfalse);
-			}
-			hash_insert(&hash, i64tonum(val), attrs_array);
-		}
-		else
-		{
-			if(*(r->ret) == HYPERCLIENT_SUCCESS)
-			{	
-				hash_insert(&hash_op, i64tonum(val), INT2NUM(0));
-				rb_ary_unshift(attrs_array, Qtrue);
-			}
-			else
-			{
-				rb_ary_unshift(attrs_array, Qfalse);
-			}
-			hash_insert(&hash, i64tonum(val), attrs_array);
-		}
-	}while(val != r->val);
-
-	attr_val = rb_ary_shift(attrs_array);
-	hash_insert(&hash, i64tonum(r->val), attrs_array);
-	new_op = rb_hash_lookup(hash_op, i64tonum(r->val));
-	if(NUM2INT(new_op) == 0)
-	{
-		rb_hash_delete(hash_op, i64tonum(val));
-		rb_hash_delete(hash, i64tonum(val));
-	}
-	return attr_val;
-}
-
-VALUE hc_next(VALUE self)
-{
-	struct ruby_hyperclient* r;
-	Data_Get_Struct(self, struct ruby_hyperclient, r);
-	if(r == NULL || r->client == NULL)
-	{
-		return Qnil;
-	}
-	if(r->op != 7)
-	{
-		rb_raise(rb_eArgError, "Invalid operation");
-		return Qnil;
-	}
-	return hc_wait(self);
-}
-
-VALUE hc_async_atomicincdec(VALUE self, int isinc, VALUE space, VALUE key, VALUE attrs)
-{
-	int64_t val;
-        struct ruby_hyperclient *r;
-        char* hc_space;
-        char* hc_key;
-        size_t hc_key_size;
-        VALUE client;
-        enum hyperclient_returncode code;
-        struct hyperclient_attribute* a;
-        size_t a_sz;
-	int i;
-        r = copy_client(self);
-	hc_space = STR2CSTR(space);
-        hc_key = STR2CSTR(key);
-        hc_key_size = strlen(hc_key);
-        a_sz = ary_len(attrs);
-	a = ALLOC_N(struct hyperclient_attribute, a_sz);
- 	array_to_attrs(attrs, isinc, &a, a_sz);
-	
-	for(i=0;i<a_sz;i++)
-	{
-		if(a[i].datatype != HYPERDATATYPE_INT64)
-		{
-			destroy_attrs(&a, a_sz);
-		        hyperclient_destroy_attrs(a, a_sz);
-			free(r);
-			raise(HYPERCLIENT_WRONGTYPE);
-			return Qnil;
-		}
-	}
-	r->val = hyperclient_atomicinc(r->client, hc_space, hc_key, hc_key_size, a, a_sz, r->ret);
-	if(r->val<0)
-	{
-		destroy_attrs(&a, a_sz);
-	        hyperclient_destroy_attrs(a, a_sz);
-		free(r);
-		raise(*(r->ret));
-		return Qnil;
-	}
-	r->op = 5;
-        client = Data_Wrap_Struct(chyperclient, 0, 0, r);
-	hash_insert(&hash, i64tonum(r->val), Qnil);
-	hash_insert(&hash_op, i64tonum(r->val), INT2NUM(5));
-	destroy_attrs(&a, a_sz);
-	hyperclient_destroy_attrs(a, a_sz);
-	return client;
-}
-
-VALUE hc_async_atomicinc(VALUE self, VALUE space, VALUE key, VALUE attrs)
-{
-	return hc_async_atomicincdec(self, 1, space, key, attrs);
-}
-
-VALUE hc_async_atomicdec(VALUE self, VALUE space, VALUE key, VALUE attrs)
-{
-	return hc_async_atomicincdec(self, 0, space, key, attrs);
-}
-
-VALUE hc_async_condput(VALUE self, VALUE space, VALUE key, VALUE old_attrs, VALUE new_attrs)
-{
-        int64_t val;
-        struct ruby_hyperclient *r;
-	char* hc_space;
-        char* hc_key;
-        size_t hc_key_size;
-        enum hyperclient_returncode code;
-		
-        struct hyperclient_attribute* a;
-	struct hyperclient_attribute* b;
-	
-	size_t a_sz, b_sz;
-	VALUE client;
-	r = copy_client(self);
-	hc_space = STR2CSTR(space);
-        hc_key = STR2CSTR(key);
-        hc_key_size = strlen(hc_key);
-        a_sz = ary_len(old_attrs);
-	b_sz = ary_len(new_attrs);
-	a = ALLOC_N(struct hyperclient_attribute, a_sz);
-	b = ALLOC_N(struct hyperclient_attribute, b_sz);
-        array_to_attrs(old_attrs, 1, &a, a_sz);
-	array_to_attrs(new_attrs, 1, &b, b_sz);
-	r->val = hyperclient_condput(r->client, hc_space, hc_key, hc_key_size, a, a_sz, b, b_sz, r->ret);
-	if(r->val < 0)
-	{
-		destroy_attrs(&a, a_sz);
-	        destroy_attrs(&b, b_sz);
-        	hyperclient_destroy_attrs(a,a_sz);
-	        hyperclient_destroy_attrs(b,b_sz);
-		free(r);
-		raise(*(r->ret));
-		return Qnil;
-	}
-	r->op = 3;	//Condput
-	client = Data_Wrap_Struct(chyperclient, 0, 0, r);
-	hash_insert(&hash, i64tonum(r->val), Qnil);
-	hash_insert(&hash_op, i64tonum(r->val), INT2NUM(r->op));
-	destroy_attrs(&a, a_sz);
-	destroy_attrs(&b, b_sz);
-        hyperclient_destroy_attrs(a,a_sz);
-	hyperclient_destroy_attrs(b,b_sz);
-	return client;	
-}
-
-VALUE hc_async_get(VALUE self, VALUE space, VALUE key)
-{
-        struct ruby_hyperclient *r;
-        char* hc_space;
-        char* hc_key;
-        size_t hc_key_size;
-        int64_t val;
-	VALUE client;
-	VALUE attrs;
-	VALUE arr, a, Key, value;
-	int i;
-	char *strvalue;
-	r = copy_client(self);
-	hc_space = STR2CSTR(space);
-        hc_key = STR2CSTR(key);
-        hc_key_size = strlen(hc_key);
-	r->val = hyperclient_get(r->client, hc_space, hc_key, hc_key_size, r->ret, r->attrs, r->attrs_size);
-	if(r->val<0)
-	{
-		free(r);
-		raise(*(r->ret));
-		return Qnil;
-	}
-	r->op = 1;
-	hash_insert(&hash, i64tonum(r->val), Qnil);
-	hash_insert(&hash_op, i64tonum(r->val), INT2NUM(r->op));
-	client = Data_Wrap_Struct(chyperclient, 0, 0, r);
-	return client; 
-}
-
-VALUE hc_async_put(VALUE self, VALUE space, VALUE key, VALUE attrs)
-{
-	int64_t val;
-	struct ruby_hyperclient *r;
-        char* hc_space;
-        char* hc_key;
-        size_t hc_key_size;
-	int i;
-	VALUE client;
-	int64_t num;
-	enum hyperclient_returncode code;	
-	struct hyperclient_attribute* a;
-        r = copy_client(self);
-	hc_space = STR2CSTR(space);
-        hc_key = STR2CSTR(key);
-        hc_key_size = strlen(hc_key);
-        *(r->attrs_size) = ary_len(attrs);
-	a = ALLOC_N(struct hyperclient_attribute, *(r->attrs_size));
-	array_to_attrs(attrs, 1, &a, *(r->attrs_size));
-        r->val = hyperclient_put(r->client, hc_space, hc_key, hc_key_size, a, *(r->attrs_size), r->ret);
-        if(r->val < 0)
-        {
-		destroy_attrs(&a, *(r->attrs_size));
-               	hyperclient_destroy_attrs(a, *(r->attrs_size));
-		free(r);
-		raise(*(r->ret));
-		return Qnil;
-        }
-	r->op = 2;
-	hash_insert(&hash, i64tonum(r->val), Qnil);
-	hash_insert(&hash_op, i64tonum(r->val), INT2NUM(r->op));
-	client = Data_Wrap_Struct(chyperclient, 0, 0, r);
-	destroy_attrs(&a, *(r->attrs_size));
-	hyperclient_destroy_attrs(a, *(r->attrs_size));
-	return client;
-}
-
-VALUE hc_async_search(VALUE self, VALUE space, VALUE attrs)
-{
-	int64_t val, num;
-        struct ruby_hyperclient * r;
-        char* hc_space;
-        enum hyperclient_returncode code;
-        struct hyperclient_attribute* a;
-        struct hyperclient_range_query* range;
-        size_t sz, a_sz, r_sz;
-        VALUE client, k, v, v1, v2;
-	int i, ai, ri;
-
-       	r = copy_client(self); 
-        hc_space = STR2CSTR(space);
-        sz = ary_len(attrs);
-
-	a_sz = 0;
-	r_sz = 0;
-	for(i = 0; i < sz; i++)
-	{
-                v = RARRAY(RARRAY(attrs)->ptr[i])->ptr[1];
-		if(TYPE(v) == T_ARRAY)
-		{		
-			r_sz++;
-		}
-		else
-		{
-			a_sz++;
-		}
-	}
-
-	a = ALLOC_N(struct hyperclient_attribute, a_sz);
-	range = ALLOC_N(struct hyperclient_range_query, r_sz);
-
-	for(i = 0, ai = 0, ri = 0; i < sz; i++)
-	{
-		k = RARRAY(RARRAY(attrs)->ptr[i])->ptr[0];
-                v = RARRAY(RARRAY(attrs)->ptr[i])->ptr[1];
-                if(TYPE(v) == T_ARRAY)
-                {
-        		range[ri].attr = STR2CSTR(k);
-			v1 = RARRAY(v)->ptr[0];
-			v2 = RARRAY(v)->ptr[1];
-			if(FIXNUM_P(v1) && FIXNUM_P(v2) )
-	 		{
-				num = (int64_t)NUM2LL(v1);
-                                num = htole64(num);
-                                memmove((void *)&(range[ri].lower), &num, (size_t)8);
-
-				num = (int64_t)NUM2LL(v2);
-                                num = htole64(num);
-                                memmove((void *)&(range[ri].upper), &num, (size_t)8);			
-			}
-			else
-			{
-				destroy_attrs(&a, a_sz);
-		                hyperclient_destroy_attrs(a, a_sz);
-        		        free(range);
-	                	free(r);
-				raise(*(r->ret));
-				return Qnil;
-			}
-	               	ri++;
-                }
-                else
-                {
-                	a[ai].attr = STR2CSTR(k);
-	                if(FIXNUM_P(v))
-        	        {
-                	        num = (int64_t)NUM2LL(v);
-	                        num = htole64(num);
-				a[ai].value = ALLOC_N(char, 8);
-                	        memmove((void *)a[i].value, &num, (size_t)8);
-                        	a[ai].value_sz = 8;
-	                        a[ai].datatype = HYPERDATATYPE_INT64;
-        	        }
-                	else
-	                {	
-                        	a[ai].value = STR2CSTR(v);
-        	                a[ai].value_sz = strlen(a[ai].value);
-                	        a[ai].datatype = HYPERDATATYPE_STRING;
-                	}
-			ai++;
-                }
-	}
-        r->val = hyperclient_search(r->client, hc_space, a, a_sz, range, r_sz, r->ret, r->attrs, r->attrs_size);
-	if(r->val < 0)
-        {
-		destroy_attrs(&a, a_sz);
-                hyperclient_destroy_attrs(a, a_sz);
-                free(range);
-		free(r);
-                raise(*(r->ret));
-		return Qnil;
-        }
-        r->op = 7;      //Search
-	hash_insert(&hash, i64tonum(r->val), Qnil);
-	hash_insert(&hash_op, i64tonum(r->val), INT2NUM(r->op));
-        client = Data_Wrap_Struct(chyperclient, 0, 0, r);
-	destroy_attrs(&a, a_sz);
-        hyperclient_destroy_attrs(a,a_sz);
-        free(range);
-        return client;	
-}
-
-VALUE hc_async_delete(VALUE self, VALUE space, VALUE key)
-{
-	struct ruby_hyperclient *r;
-        char* hc_space;
-        char* hc_key;
-        size_t hc_key_size;
-        int64_t val;
-        VALUE client;
-        int i;
-        r = copy_client(self);
-	hc_space = STR2CSTR(space);
-        hc_key = STR2CSTR(key);
-        hc_key_size = strlen(hc_key);
-        r->val = hyperclient_del(r->client, hc_space, hc_key, hc_key_size, r->ret);
-        if(r->val<0)
-        {
-		free(r);
-                raise(*(r->ret));
-		return Qnil;
-        }
-        r->op = 4;      // Delete
-	hash_insert(&hash, i64tonum(r->val), Qnil);
-	hash_insert(&hash_op, i64tonum(r->val), INT2NUM(r->op));
-        client = Data_Wrap_Struct(chyperclient, 0, 0, r);
-        return client;
-}
-
-VALUE hc_atomicdec(VALUE self, VALUE space, VALUE key, VALUE attrs)
-{
-        VALUE client;
-        client = hc_async_atomicdec(self, space, key, attrs);
-        return hc_wait(client);
-}
-
-VALUE hc_atomicinc(VALUE self, VALUE space, VALUE key, VALUE attrs)
-{
-	VALUE client, val;
-	struct ruby_hyperclient* r;
-	client = hc_async_atomicinc(self, space, key, attrs);
-	val = hc_wait(client);
-	Data_Get_Struct(client, struct ruby_hyperclient, r);
-	free(r);
-	return val;
-}
-
-VALUE hc_condput(VALUE self, VALUE space, VALUE key, VALUE old_attrs, VALUE new_attrs)
-{
-	VALUE client, val;
-	struct ruby_hyperclient *r;	
-	client =  hc_async_condput(self, space, key, old_attrs, new_attrs);
-	val = hc_wait(client);
-	Data_Get_Struct(client, struct ruby_hyperclient, r);
-	free(r);
-	return val;
-}
-
-VALUE hc_search(VALUE self, VALUE space, VALUE attrs)
-{
-	VALUE client, val, val_array;
-	struct ruby_hyperclient *r;
-	client = hc_async_search(self, space, attrs);
-	if(client == Qnil)
-	{
-		return Qnil;
-	}
-	val_array = rb_ary_new();
-	while((val=hc_wait(client)) != Qnil)
-	{
-		rb_ary_unshift(val_array, val);
-	}
-	Data_Get_Struct(client, struct ruby_hyperclient, r);
-	free(r);
-	return val_array;
-}
-
-VALUE hc_delete(VALUE self, VALUE space, VALUE key)
-{
-	VALUE client, val;
-	struct ruby_hyperclient *r;
-	client = hc_async_delete(self, space, key);
-	val = hc_wait(client);
-	Data_Get_Struct(client, struct ruby_hyperclient, r);
-        free(r);
-	return val;
-}
-
-VALUE hc_get(VALUE self, VALUE space, VALUE key)
-{
-	VALUE c, val;
-	struct ruby_hyperclient* r;
-	c = hc_async_get(self, space, key);
-	val = hc_wait(c);
-	Data_Get_Struct(c, struct ruby_hyperclient, r);
-	free(r);	
-	return val;
-}
-
-VALUE hc_put(VALUE self, VALUE space, VALUE key, VALUE attrs)
-{
-	VALUE c, val;
-	struct ruby_hyperclient* r;
-	c = hc_async_put(self, space, key, attrs);
-	val = hc_wait(c);
- 	Data_Get_Struct(c, struct ruby_hyperclient, r);
-        xfree(r);
-        return val;
-}
-
-
-VALUE hc_destroy(VALUE self)
-{
-	struct ruby_hyperclient* r;
-	Data_Get_Struct(self, struct ruby_hyperclient, r);
-	if(r->client != NULL)
-		hyperclient_destroy(r->client);
-	free(r->attrs);
-	free(r->attrs_size);
-	free(r->ret);
-	return Qnil;
-}
-
-void Init_hyperclient() {
-  rb_define_method(chyperclient, "get", hc_get, 2);
-  rb_define_method(chyperclient, "put", hc_put, 3);
-  rb_define_method(chyperclient, "async_put", hc_async_put, 3);
-  rb_define_method(chyperclient, "async_get", hc_async_get, 2);
-  rb_define_method(chyperclient, "destroy", hc_destroy, 0);
-  rb_define_method(chyperclient, "condput", hc_condput, 4);
-  rb_define_method(chyperclient, "async_condput", hc_async_condput, 4);
-  rb_define_method(chyperclient, "atomicinc", hc_atomicinc, 3);
-  rb_define_method(chyperclient, "async_atomicinc", hc_async_atomicinc, 3);
-  rb_define_method(chyperclient, "atomicdec", hc_atomicdec, 3);
-  rb_define_method(chyperclient, "async_atomicdec", hc_async_atomicdec, 3);
-  rb_define_method(chyperclient, "search", hc_search, 2);
-  rb_define_method(chyperclient, "async_search", hc_async_search, 2);
-  rb_define_method(chyperclient, "next", hc_next, 0);
-  rb_define_method(chyperclient, "delete", hc_delete, 2);
-  rb_define_method(chyperclient, "async_delete", hc_async_delete, 2);
-  rb_define_method(chyperclient, "wait", hc_wait, 0);
-
-}
-
-
-#endif

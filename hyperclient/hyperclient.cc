@@ -78,6 +78,7 @@
     } \
     if (!validate_as_type(e::slice((KEY), (KEY_SZ)), (SCHEMA)->attrs[0].type)) \
     { \
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE" << std::endl; \
         *status = HYPERCLIENT_WRONGTYPE; \
         return -1; \
     }
@@ -274,6 +275,7 @@ hyperclient :: sorted_search(const char* space,
 
     if (attrtype != HYPERDATATYPE_STRING && attrtype != HYPERDATATYPE_INT64)
     {
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE" << std::endl; \
         *status = HYPERCLIENT_WRONGTYPE;
         return -1 - eq_sz - rn_sz;
     }
@@ -857,6 +859,7 @@ hyperclient :: prepare_checks(const class schema* sc,
                                          e::slice(condattrs[i].value, condattrs[i].value_sz),
                                          condattrs[i].datatype))
         {
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE" << std::endl; \
             *status = HYPERCLIENT_WRONGTYPE;
             return i;
         }
@@ -901,6 +904,7 @@ hyperclient :: prepare_ops(const class schema* sc,
                            e::slice(attrs[i].value, attrs[i].value_sz), attrs[i].datatype,
                            e::slice(), HYPERDATATYPE_GARBAGE))
         {
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE " << std::endl; \
             *status = HYPERCLIENT_WRONGTYPE;
             return i;
         }
@@ -945,6 +949,7 @@ hyperclient :: prepare_ops(const class schema* sc,
                            e::slice(attrs[i].value, attrs[i].value_sz), attrs[i].value_datatype,
                            e::slice(attrs[i].map_key, attrs[i].map_key_sz), attrs[i].map_key_datatype))
         {
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE" << std::endl; \
             *status = HYPERCLIENT_WRONGTYPE;
             return i;
         }
@@ -1029,6 +1034,7 @@ hyperclient :: prepare_searchop(const char* space,
 
         if (sc->attrs[attrnum].type != HYPERDATATYPE_INT64)
         {
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE" << std::endl; \
             *status = HYPERCLIENT_WRONGTYPE;
             return -1 - eq_sz - i;
         }
@@ -1139,6 +1145,7 @@ hyperclient :: validate_attribute(schema* sc,
                                      e::slice(attr->value, attr->value_sz),
                                      attr->datatype))
     {
+std::cerr << __FILE__ << ":" << __LINE__ << " WRONG TYPE" << std::endl; \
         *status = HYPERCLIENT_WRONGTYPE;
         return sc->attrs_sz;
     }

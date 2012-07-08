@@ -387,7 +387,6 @@ cdef _dict_to_map_attrs(list value, hyperclient_map_attribute** attrs, size_t* a
         name, b = a
         keytype = None
         valtype = None
-        j = i
         if isinstance(b, dict):
             for k, v in b.iteritems():
                 kdatatype, kbacking = _obj_to_backing(k)
@@ -689,7 +688,6 @@ cdef _check_reqid_key_attrs(int64_t reqid, hyperclient_returncode status,
         attr = None
         if idx >= 0 and idx < attrs_sz and attrs and attrs[idx].attr:
             attr = attrs[idx].attr
-        print 'THROWING', idx, attr, status
         raise HyperClientException(status, attr)
 
 
@@ -702,7 +700,7 @@ cdef _check_reqid_key_attrs2(int64_t reqid, hyperclient_returncode status,
         attr = None
         if idx >= 0 and idx < attrs_sz1 and attrs1 and attrs1[idx].attr:
             attr = attrs1[idx].attr
-        idx -= attrs_sz2
+        idx -= attrs_sz1
         if idx >= 0 and idx < attrs_sz2 and attrs2 and attrs2[idx].attr:
             attr = attrs2[idx].attr
         raise HyperClientException(status, attr)

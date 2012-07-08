@@ -1,1 +1,2 @@
+# space kv dimensions k, v key k auto 0 1
 {"action": "get", "space": "noexist", "key": "k", "expected": "HYPERCLIENT_UNKNOWNSPACE"}

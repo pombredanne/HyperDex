@@ -1,0 +1,384 @@
+#!/usr/bin/env ruby
+
+# Copyright (c) 2012, Cornell University
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#     * Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of HyperDex nor the names of its contributors may be
+#       used to endorse or promote products derived from this software without
+#       specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Interpret JSON objects as a script for testing HyperDex.
+
+require 'optparse'
+require 'ostruct'
+require 'pp'
+require 'set'
+
+require 'json'
+
+require 'hyperclient'
+
+class HyperDexJSONBridge
+
+    @@VALUE_IDENTITY = Set.new(["string", "int64", "float",
+                                "list(string)", "list(int64)", "list(float)",
+                                "map(string,string)", "map(string,int64)", "map(string,float)",
+                                "map(int64,string)", "map(int64,int64)", "map(int64,float)",
+                                "map(float,string)", "map(float,int64)", "map(float,float)"])
+
+    @@VALUE_CONVERT = {"set(string)" => lambda { |x| Set(x) },
+                       "set(int64)" => lambda { |x| Set(x) },
+                       "set(float)" => lambda { |x| Set(x) }}
+
+    def initialize(host, port)
+        @client = HyperClient.new(host, port)
+    end
+
+    def perform_action(action)
+        if not action.has_key?("action")
+            raise RuntimeError.new("missing 'action' field")
+        end
+        if not self.respond_to?("action_" + action["action"])
+            raise RuntimeError.new("unknown action %s" % action["action"])
+        end
+        self.send("action_" + action["action"], action)
+    end
+
+    protected
+
+    def kve(action, meth)
+        check_fields(action, "space", "key", "value", "expected")
+        expected = action["expected"]
+        begin
+            returned = meth.call(action["space"], action["key"], to_value(action["value"]))
+            compare_success(action["expected"], returned)
+        rescue HyperClient::HyperClientException => e:
+            compare_exception(expected, e)
+        end
+    end
+
+    def action_get(action)
+        check_fields(action, "space", "key", "expected")
+        expected = action["expected"]
+        begin
+            returned = @client.get(action["space"], action["key"])
+            compare_success(action["expected"], returned)
+        rescue HyperClient::HyperClientException => e:
+            compare_exception(expected, e)
+        end
+    end
+
+    def action_put(action)
+        kve(action, @client.method(:put))
+    end
+
+    def action_put_if_not_exist(action)
+        kve(action, @client.method(:put_if_not_exist))
+    end
+
+    def action_condput(action)
+        check_fields(action, "space", "key", "condition", "value", "expected")
+        expected = action["expected"]
+        begin
+            returned = @client.condput(action["space"], action["key"],
+                                       to_value(action["condition"]),
+                                       to_value(action["value"]))
+            compare_success(action["expected"], returned)
+        rescue HyperClient::HyperClientException => e:
+            compare_exception(expected, e)
+        end
+    end
+
+    def action_del(action)
+        check_fields(action, "space", "key", "expected")
+        expected = action["expected"]
+        begin
+            returned = @client.del(action["space"], action["key"])
+            compare_success(action["expected"], returned)
+        rescue HyperClient::HyperClientException => e:
+            compare_exception(expected, e)
+        end
+    end
+
+    def action_atomic_add(action)
+        kve(action, @client.method(:atomic_add))
+    end
+
+    def action_atomic_sub(action)
+        kve(action, @client.method(:atomic_sub))
+    end
+
+    def action_atomic_mul(action)
+        kve(action, @client.method(:atomic_mul))
+    end
+
+    def action_atomic_div(action)
+        kve(action, @client.method(:atomic_div))
+    end
+
+    def action_atomic_mod(action)
+        kve(action, @client.method(:atomic_mod))
+    end
+
+    def action_atomic_and(action)
+        kve(action, @client.method(:atomic_and))
+    end
+
+    def action_atomic_or(action)
+        kve(action, @client.method(:atomic_or))
+    end
+
+    def action_atomic_xor(action)
+        kve(action, @client.method(:atomic_xor))
+    end
+
+    def action_string_prepend(action)
+        kve(action, @client.method(:string_prepend))
+    end
+
+    def action_string_append(action)
+        kve(action, @client.method(:string_append))
+    end
+
+    def action_list_lpush(action)
+        kve(action, @client.method(:list_lpush))
+    end
+
+    def action_list_rpush(action)
+        kve(action, @client.method(:list_rpush))
+    end
+
+    def action_set_add(action)
+        kve(action, @client.method(:set_add))
+    end
+
+    def action_set_remove(action)
+        kve(action, @client.method(:set_remove))
+    end
+
+    def action_set_intersect(action)
+        kve(action, @client.method(:set_intersect))
+    end
+
+    def action_set_union(action)
+        kve(action, @client.method(:set_union))
+    end
+
+    def action_map_add(action)
+        kve(action, @client.method(:map_add))
+    end
+
+    def action_map_remove(action)
+        kve(action, @client.method(:map_remove))
+    end
+
+    def action_map_atomic_add(action)
+        kve(action, @client.method(:map_atomic_add))
+    end
+
+    def action_map_atomic_sub(action)
+        kve(action, @client.method(:map_atomic_sub))
+    end
+
+    def action_map_atomic_mul(action)
+        kve(action, @client.method(:map_atomic_mul))
+    end
+
+    def action_map_atomic_div(action)
+        kve(action, @client.method(:map_atomic_div))
+    end
+
+    def action_map_atomic_mod(action)
+        kve(action, @client.method(:map_atomic_mod))
+    end
+
+    def action_map_atomic_and(action)
+        kve(action, @client.method(:map_atomic_and))
+    end
+
+    def action_map_atomic_or(action)
+        kve(action, @client.method(:map_atomic_or))
+    end
+
+    def action_map_atomic_xor(action)
+        kve(action, @client.method(:map_atomic_xor))
+    end
+
+    def action_map_string_prepend(action)
+        kve(action, @client.method(:map_string_prepend))
+    end
+
+    def action_map_string_append(action)
+        kve(action, @client.method(:map_string_append))
+    end
+
+    def check_fields(action, *others)
+        for arg in others
+            if not action.has_key?(arg)
+                raise RuntimeError.new("missing field '%s'" % arg)
+            end
+        end
+    end
+
+    def compare_success(expected, returned)
+        if expected.is_a?(String)
+            error  = "should have raised an exception but returned a value instead\n"
+            error += "    expected:  %s\n" % PP.pp(expected)
+            error += "    returned:  %s" % PP.pp(returned)
+            raise RuntimeError.new(error)
+        end
+        if expected == true or expected == false or expected == nil
+            if expected != returned
+                error  = "unexpected value returned\n"
+                error += "    expected:  %s\n" % PP.pp(expected)
+                error += "    returned:  %s" % PP.pp(returned)
+                raise RuntimeError.new(error)
+            end
+            return
+        end
+        if not expected.is_a?(Hash)
+            raise RuntimeError.new("'expected' should be true, false, none or a hash")
+        end
+        if not returned.is_a?(Hash)
+            error  = "should have returned a dict\n"
+            error += "    expected:  %s\n" % PP.pp(expected)
+            error += "    returned:  %s" % PP.pp(returned)
+            raise RuntimeError.new(error)
+        end
+        if to_value(expected) != returned:
+            error  = "returned unexpected value\n"
+            error += "    expected:  %r\n" % PP.pp(expected)
+            error += "    returned:  %r" % PP.pp(returned)
+            raise RuntimeError.new(error)
+        end
+    end
+
+    def compare_exception(expected, exception)
+        if not expected.is_a?(String)
+            raise RuntimeError.new("caused an exception:  %s %s" % [exception, exception.symbol()])
+        end
+        if expected != exception.symbol()
+            raise RuntimeError.new("should have raised %s but raised %s instead" % [expected, exception.symbol()])
+        end
+    end
+
+    def to_value(valuehash)
+        ret = Hash.new()
+        if not valuehash.is_a?(Hash)
+            raise RuntimeError.new("%s should be a value dict" % PP.pp(valuedict))
+        end
+        valuehash.each_pair do |attrname, value|
+            if not attrname.is_a?(String)
+                raise RuntimeError.new("valuehash's keys should be strings")
+            end
+            if not value.is_a?(Hash)
+                raise RuntimeError.new("valuehash's values should be hashes")
+            end
+            if Set.new(value.keys()) != Set.new(["type", "value"])
+                raise RuntimeError.new("valuehash's inner hashes must have 'type' and 'value' as keys")
+            end
+            if @@VALUE_IDENTITY.include?(value["type"])
+                ret[attrname] = value["value"]
+            elsif @@VALUE_CONVERT.include?(value["type"])
+                ret[attrname] = @@VALUE_CONVERT[value["type"]].call(value["value"])
+            else
+                raise RuntimeError("valuehash's 'type' is invalid")
+            end
+        end
+        ret
+    end
+end
+
+def main(argv)
+    args = OpenStruct.new
+    args.host = '127.0.0.1'
+    args.port = 1234
+    args.read = nil
+    args.time = false
+
+    opts = OptionParser.new do |opts|
+        opts.banner = "Usage:  hyperdex-json-bridge-ruby [options]"
+        opts.separator ""
+        opts.separator "Specific options"
+
+        opts.on("--host HOST",
+                "Address of the coordinator") do |host|
+            args.host = host
+        end
+        opts.on("--port PORT", Integer,
+                "Port for the coordinator") do |port|
+            args.port = port
+        end
+        opts.on("--read FILE",
+                "The script to read from") do |read|
+            args.read = read
+        end
+        opts.on("--[no-]time",
+                "Print statistics about running") do |time|
+            args.time = time
+        end
+        opts.on_tail("-h", "--help", "Show this message") do
+            puts opts
+            exit -1
+        end
+    end
+    opts.parse!(argv)
+    hdjb = HyperDexJSONBridge.new(args.host, args.port)
+    json_source = nil
+    if args.read.nil?
+        json_source = STDIN
+    else
+        json_source = File.new(args.read, "r")
+    end
+    lineno = 1
+    comments = 0
+    begin
+        starttime = Time.new
+        while (line = json_source.gets)
+            line = line.strip()
+            if not line.start_with?("#") and line.size > 0
+                action = JSON.parse(line.strip)
+                hdjb.perform_action(action)
+            else
+                comments += 1
+            end
+            lineno += 1
+        end
+        endtime = Time.new
+        if args.time:
+            ops = lineno - comments - 1
+            secs = endtime - starttime
+            opssec = ops / secs
+            print ops.to_s + " ops in " + secs.to_s + " seconds (" + opssec.to_s + " ops/second)"
+        end
+    rescue JSON::ParserError => e
+        $stderr.puts "error on line " + lineno.to_s + ":  " + e.message
+        exit -1
+    rescue RuntimeError => e
+        $stderr.puts "error on line " + lineno.to_s + ":  " + e.message
+        exit -1
+    end
+end
+
+if __FILE__ == $0
+    main ARGV
+end

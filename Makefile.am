@@ -56,6 +56,7 @@ noinst_HEADERS = \
 			$(libhyperdisk_noinst_headers) \
 			$(libhyperdex_noinst_headers) \
 			$(libhyperclient_noinst_headers) \
+			$(hyperclient_ruby_noinst_headers) \
 			util/atomicfile.h
 
 bin_PROGRAMS = \
@@ -547,8 +548,11 @@ ruby_LTLIBRARIES = \
 			hyperclient/ruby/hyperclient.la
 endif
 
+hyperclient_ruby_noinst_headers = \
+			hyperclient/ruby/type_conversion.h
 hyperclient_ruby_hyperclient_la_SOURCES = \
-			hyperclient/ruby/hyperclient.c
+			hyperclient/ruby/hyperclient.c \
+			hyperclient/ruby/type_conversion.cc
 hyperclient_ruby_hyperclient_la_CPPFLAGS = \
 			$(RUBY_CPPFLAGS) \
 			$(CPPFLAGS)
