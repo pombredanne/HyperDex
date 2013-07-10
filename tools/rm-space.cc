@@ -35,7 +35,7 @@
 #include <e/guard.h>
 
 // HyperDex
-#include "client/hyperclient.h"
+#include "client/hyperclient.hpp"
 #include "tools/common.h"
 
 static struct poptOption popts[] = {
@@ -89,7 +89,7 @@ main(int argc, const char* argv[])
 
     try
     {
-        hyperclient h(_connect_host, _connect_port);
+        HyperClient h(_connect_host, _connect_port);
 
         for (size_t i = 0; args && args[i]; ++i)
         {

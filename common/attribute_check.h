@@ -33,6 +33,7 @@
 
 // HyperDex
 #include "hyperdex.h"
+#include "common/schema.h"
 
 namespace hyperdex
 {
@@ -49,6 +50,25 @@ class attribute_check
         hyperdatatype datatype;
         hyperpredicate predicate;
 };
+
+bool
+validate_attribute_check(const schema& sc,
+                         const attribute_check& chk);
+
+size_t
+validate_attribute_checks(const schema& sc,
+                          const std::vector<hyperdex::attribute_check>& checks);
+
+bool
+passes_attribute_check(const schema& sc,
+                       const attribute_check& chk,
+                       const e::slice& value);
+
+size_t
+passes_attribute_checks(const schema& sc,
+                        const std::vector<hyperdex::attribute_check>& checks,
+                        const e::slice& key,
+                        const std::vector<e::slice>& value);
 
 bool
 operator < (const attribute_check& lhs,

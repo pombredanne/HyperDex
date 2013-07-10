@@ -173,8 +173,33 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    alarm(30);
     google::LogToStderr();
+
+    if (daemonize)
+    {
+        LOG(INFO) << "forking off to the background";
+        LOG(INFO) << "you can find the log at hyperdex-daemon-YYYYMMDD-HHMMSS.sssss";
+        LOG(INFO) << "provide \"--foreground\" on the command-line if you want to run in the foreground";
+        google::SetLogSymlink(google::INFO, "");
+        google::SetLogSymlink(google::WARNING, "");
+        google::SetLogSymlink(google::ERROR, "");
+        google::SetLogSymlink(google::FATAL, "");
+        google::SetLogDestination(google::INFO, "hyperdex-daemon-");
+
+        if (::daemon(1, 0) < 0)
+        {
+            PLOG(ERROR) << "could not daemonize";
+            return EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        LOG(INFO) << "running in the foreground";
+        LOG(INFO) << "no log will be generated; instead, the log messages will print to the terminal";
+        LOG(INFO) << "provide \"--daemon\" on the command-line if you want to run in the background";
+    }
+
+    alarm(30);
     bool saved = false;
     server_id saved_us;
     po6::net::location saved_bind_to;
@@ -245,18 +270,6 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    if (daemonize)
-    {
-        LOG(INFO) << "forking off to the background; goodbye!";
-        google::SetLogDestination(google::INFO, "hyperdex-");
-
-        if (::daemon(1, 0) < 0)
-        {
-            PLOG(ERROR) << "could not daemonize";
-            return EXIT_FAILURE;
-        }
-    }
-
     m_comm.setup(bind_to, threads);
     m_repl.setup();
     m_stm.setup();
@@ -264,7 +277,7 @@ daemon :: run(bool daemonize,
 
     for (size_t i = 0; i < threads; ++i)
     {
-        std::tr1::shared_ptr<po6::threads::thread> t(new po6::threads::thread(std::tr1::bind(&daemon::loop, this)));
+        std::tr1::shared_ptr<po6::threads::thread> t(new po6::threads::thread(std::tr1::bind(&daemon::loop, this, i)));
         m_threads.push_back(t);
         t->start();
     }
@@ -344,10 +357,19 @@ daemon :: run(bool daemonize,
 }
 
 void
-daemon :: loop()
+daemon :: loop(size_t thread)
 {
-    LOG(INFO) << "network thread started";
     sigset_t ss;
+
+    size_t core = thread % sysconf(_SC_NPROCESSORS_ONLN);
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core, &cpuset);
+    pthread_t cur = pthread_self();
+    int x = pthread_setaffinity_np(cur, sizeof(cpu_set_t), &cpuset);
+    assert(x == 0);
+
+    LOG(INFO) << "network thread " << thread << " started on core " << core;
 
     if (sigfillset(&ss) < 0)
     {
@@ -355,7 +377,9 @@ daemon :: loop()
         return;
     }
 
-    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
+    sigdelset(&ss, SIGPROF);
+
+    if (pthread_sigmask(SIG_SETMASK, &ss, NULL) < 0)
     {
         PLOG(ERROR) << "could not block signals";
         return;
@@ -469,7 +493,6 @@ daemon :: process_req_get(server_id from,
             result = NET_NOTFOUND;
             break;
         case datalayer::BAD_ENCODING:
-        case datalayer::BAD_SEARCH:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
         case datalayer::LEVELDB_ERROR:
@@ -509,10 +532,10 @@ daemon :: process_req_atomic(server_id from,
         return;
     }
 
+    bool erase = !(flags & 128);
     bool fail_if_not_found = flags & 1;
     bool fail_if_found = flags & 2;
-    bool has_funcalls = flags & 128;
-    m_repl.client_atomic(from, vto, nonce, fail_if_not_found, fail_if_found, !has_funcalls, key, &checks, &funcs);
+    m_repl.client_atomic(from, vto, nonce, erase, fail_if_not_found, fail_if_found, key, checks, funcs);
 }
 
 void

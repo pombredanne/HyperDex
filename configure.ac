@@ -1,7 +1,7 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.66])
+AC_PREREQ([2.62])
 AC_INIT([HyperDex], [1.0.dev], [escriva@cs.cornell.edu])
 AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
@@ -57,7 +57,6 @@ if test x"${need_swig}" = xyes; then
 fi
 
 # Checks for libraries.
-GTEST_LIB_CHECK
 AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
 -------------------------------------------------
 HyperDex relies upon the popt library.
@@ -71,10 +70,10 @@ else
     AC_SUBST([LRT_CFLAGS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.2.3])
-PKG_CHECK_MODULES([E], [libe >= 0.2.7])
-PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.1.0])
-PKG_CHECK_MODULES([REPLICANT], [replicant >= 0.0.1])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3.1])
+PKG_CHECK_MODULES([E], [libe >= 0.3.2])
+PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.3.0])
+PKG_CHECK_MODULES([REPLICANT], [replicant >= 0.2.dev])
 
 # Checks for header files.
 AC_CHECK_HEADERS([netinet/in.h stdint.h stdlib.h sys/socket.h unistd.h])
@@ -98,10 +97,10 @@ AC_CHECK_HEADER([lmdb.h],,[AC_MSG_ERROR([
 HyperDex relies upon the Lightning MDB library.
 Please install Lightning MDB to continue.
 ---------------------------------------])])
-#AC_CHECK_HEADER([leveldb/db.h],,[AC_MSG_ERROR([
+#AC_CHECK_HEADER([hyperleveldb/db.h],,[AC_MSG_ERROR([
 #---------------------------------------
-#Replicant relies upon the LevelDB library.
-#Please install LevelDB to continue.
+#Replicant relies upon the HyperLevelDB library.
+#Please install HyperLevelDB to continue.
 #---------------------------------------])])
 
 # Checks for typedefs, structures, and compiler characteristics.

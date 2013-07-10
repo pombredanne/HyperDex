@@ -642,9 +642,9 @@ configuration :: lookup_search(const char* space_name,
 
                 for (size_t l = 0; l < s->subspaces[i].attrs.size(); ++l)
                 {
-                    if (s->subspaces[i].attrs[i] == ranges[k].attr)
+                    if (s->subspaces[i].attrs[l] == ranges[k].attr)
                     {
-                        attr = i;
+                        attr = l;
                         break;
                     }
                 }
@@ -750,6 +750,14 @@ configuration :: debug_dump(std::ostream& out)
             for (size_t i = 0; i < ss.attrs.size(); ++i)
             {
                 out << " " << s.sc.attrs[ss.attrs[i]].name;
+            }
+
+            out << std::endl;
+            out << "    indices";
+
+            for (size_t i = 0; i < ss.indices.size(); ++i)
+            {
+                out << " " << s.sc.attrs[ss.indices[i]].name;
             }
 
             out << std::endl;

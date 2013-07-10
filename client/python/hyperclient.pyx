@@ -82,6 +82,9 @@ cdef extern from "../../hyperdex.h":
         HYPERPREDICATE_EQUALS        = 9729
         HYPERPREDICATE_LESS_EQUAL    = 9730
         HYPERPREDICATE_GREATER_EQUAL = 9731
+        HYPERPREDICATE_REGEX         = 9733
+        HYPERPREDICATE_LENGTH_LESS_EQUAL    = 9735
+        HYPERPREDICATE_CONTAINS      = 9737
 
 cdef extern from "../hyperclient.h":
 
@@ -144,37 +147,66 @@ cdef extern from "../hyperclient.h":
     hyperclient_returncode hyperclient_rm_space(hyperclient* client, char* space)
     int64_t hyperclient_get(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_returncode* status, hyperclient_attribute** attrs, size_t* attrs_sz)
     int64_t hyperclient_put(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
-    int64_t hyperclient_put_if_not_exist(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_cond_put(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_put_if_not_exist(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_del(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_del(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_sub(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_sub(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_mul(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_mul(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_div(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_div(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_mod(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_mod(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_and(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_and(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_or(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_or(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_atomic_xor(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_atomic_xor(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_string_prepend(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_string_prepend(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_string_append(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_string_append(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_list_lpush(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_list_lpush(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_list_rpush(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_list_rpush(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_set_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_set_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_set_remove(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_set_remove(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_set_intersect(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_set_intersect(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_set_union(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_set_union(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_remove(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_remove(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_add(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_sub(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_sub(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_mul(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_mul(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_div(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_div(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_mod(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_mod(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_and(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_and(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_or(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_or(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_atomic_xor(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_atomic_xor(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_string_prepend(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_string_prepend(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_map_string_append(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
+    int64_t hyperclient_cond_map_string_append(hyperclient* client, char* space, char* key, size_t key_sz, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute* attrs, size_t attrs_sz, hyperclient_returncode* status)
     int64_t hyperclient_search(hyperclient* client, char* space, hyperclient_attribute_check* chks, size_t chks_sz, hyperclient_returncode* status, hyperclient_attribute** attrs, size_t* attrs_sz)
     int64_t hyperclient_search_describe(hyperclient* client, char* space, hyperclient_attribute_check* chks, size_t chks_sz, hyperclient_returncode* status, char** text)
     int64_t hyperclient_sorted_search(hyperclient* client, char* space, hyperclient_attribute_check* chks, size_t chks_sz, char* sort_by, uint64_t limit, int maximize, hyperclient_returncode* status, hyperclient_attribute** attrs, size_t* attrs_sz)
@@ -185,6 +217,8 @@ cdef extern from "../hyperclient.h":
 
 ctypedef int64_t (*hyperclient_simple_op)(hyperclient*, char*, char*, size_t, hyperclient_attribute*, size_t, hyperclient_returncode*)
 ctypedef int64_t (*hyperclient_map_op)(hyperclient*, char*, char*, size_t, hyperclient_map_attribute*, size_t, hyperclient_returncode*)
+ctypedef int64_t (*hyperclient_cond_op)(hyperclient*, char*, char*, size_t, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_attribute*, size_t, hyperclient_returncode*)
+ctypedef int64_t (*hyperclient_cond_map_op)(hyperclient*, char*, char*, size_t, hyperclient_attribute_check* condattrs, size_t condattrs_sz, hyperclient_map_attribute*, size_t, hyperclient_returncode*)
 
 import collections
 import struct
@@ -728,9 +762,35 @@ cdef _check_reqid_key_attrs(int64_t reqid, hyperclient_returncode status,
         raise HyperClientException(status, attr)
 
 
+cdef _check_reqid_key_conds(int64_t reqid, hyperclient_returncode status,
+                            hyperclient_attribute_check* conds, size_t conds_sz):
+    cdef bytes attr
+    if reqid < 0:
+        idx = -2 - reqid
+        attr = None
+        if idx >= 0 and idx < conds_sz and conds and conds[idx].attr:
+            attr = conds[idx].attr
+        raise HyperClientException(status, attr)
+
+
 cdef _check_reqid_key_attrs2(int64_t reqid, hyperclient_returncode status,
                              hyperclient_attribute_check* attrs1, size_t attrs_sz1,
                              hyperclient_attribute* attrs2, size_t attrs_sz2):
+    cdef bytes attr
+    if reqid < 0:
+        idx = -2 - reqid
+        attr = None
+        if idx >= 0 and idx < attrs_sz1 and attrs1 and attrs1[idx].attr:
+            attr = attrs1[idx].attr
+        idx -= attrs_sz2
+        if idx >= 0 and idx < attrs_sz2 and attrs2 and attrs2[idx].attr:
+            attr = attrs2[idx].attr
+        raise HyperClientException(status, attr)
+
+
+cdef _check_reqid_key_cond_map_attrs(int64_t reqid, hyperclient_returncode status,
+                                     hyperclient_attribute_check* attrs1, size_t attrs_sz1,
+                                     hyperclient_map_attribute* attrs2, size_t attrs_sz2):
     cdef bytes attr
     if reqid < 0:
         idx = -2 - reqid
@@ -860,9 +920,12 @@ cdef class DeferredFromAttrs(Deferred):
             raise HyperClientException(self._status)
 
 
-cdef class DeferredCondPut(Deferred):
+cdef class DeferredCondFromAttrs(Deferred):
 
-    def __cinit__(self, Client client, bytes space, key, dict condition, dict value):
+    def __cinit__(self, Client client):
+        pass
+
+    cdef call(self, hyperclient_cond_op op, bytes space, key, dict condition, dict value):
         cdef bytes key_backing
         datatype, key_backing = _obj_to_backing(key)
         cdef char* space_cstr = space
@@ -873,15 +936,15 @@ cdef class DeferredCondPut(Deferred):
         try:
             backingsc = _predicate_to_c(condition, &condattrs, &condattrs_sz)
             backingsa = _dict_to_attrs(value.items(), &attrs)
-            self._reqid = hyperclient_cond_put(client._client, space_cstr,
-                                               key_cstr, len(key_backing),
-                                               condattrs, condattrs_sz,
-                                               attrs, len(value),
-                                               &self._status)
+            self._reqid = op(self._client._client, space_cstr,
+                             key_cstr, len(key_backing),
+                             condattrs, condattrs_sz,
+                             attrs, len(value),
+                             &self._status)
             _check_reqid_key_attrs2(self._reqid, self._status,
-                                    condattrs, len(condition),
+                                    condattrs, condattrs_sz,
                                     attrs, len(value))
-            client._ops[self._reqid] = self
+            self._client._ops[self._reqid] = self
         finally:
             if condattrs:
                 free(condattrs)
@@ -920,6 +983,39 @@ cdef class DeferredDelete(Deferred):
             raise HyperClientException(self._status)
 
 
+cdef class DeferredCondDelete(Deferred):
+
+    def __cinit__(self, Client client, bytes space, key, dict cond):
+        cdef bytes key_backing
+        datatype, key_backing = _obj_to_backing(key)
+        cdef char* space_cstr = space
+        cdef char* key_cstr = key_backing
+        cdef hyperclient_attribute_check* condattrs = NULL
+        cdef size_t condattrs_sz
+        try:
+            backings = _predicate_to_c(cond, &condattrs, &condattrs_sz)
+            self._reqid = hyperclient_cond_del(client._client, space_cstr,
+                                               key_cstr, len(key_backing),
+                                               condattrs, condattrs_sz,
+                                               &self._status)
+            _check_reqid_key_conds(self._reqid, self._status, condattrs, condattrs_sz);
+            client._ops[self._reqid] = self
+        finally:
+            if condattrs:
+                free(condattrs)
+
+    def wait(self):
+        Deferred.wait(self)
+        if self._status == HYPERCLIENT_SUCCESS:
+            return True
+        elif self._status == HYPERCLIENT_CMPFAIL:
+            return False
+        elif self._status == HYPERCLIENT_NOTFOUND:
+            return False
+        else:
+            raise HyperClientException(self._status)
+
+
 cdef class DeferredMapOp(Deferred):
 
     def __cinit__(self, Client client):
@@ -947,6 +1043,44 @@ cdef class DeferredMapOp(Deferred):
         Deferred.wait(self)
         if self._status == HYPERCLIENT_SUCCESS:
             return True
+        else:
+            raise HyperClientException(self._status)
+
+cdef class DeferredCondMapOp(Deferred):
+
+    def __cinit__(self, Client client):
+        pass
+
+    cdef call(self, hyperclient_cond_map_op op, bytes space, key, dict condition, dict value):
+        cdef bytes key_backing
+        datatype, key_backing = _obj_to_backing(key)
+        cdef char* space_cstr = space
+        cdef char* key_cstr = key_backing
+        cdef hyperclient_attribute_check* condattrs = NULL
+        cdef size_t condattrs_sz = 0
+        cdef hyperclient_map_attribute* attrs = NULL
+        cdef size_t attrs_sz = 0
+        try:
+            backingsc = _predicate_to_c(condition, &condattrs, &condattrs_sz)
+            backingsa = _dict_to_map_attrs(value.items(), &attrs, &attrs_sz)
+            self._reqid = op(self._client._client, space_cstr,
+                             key_cstr, len(key_backing),
+                             condattrs, condattrs_sz,
+                             attrs, attrs_sz, &self._status)
+            _check_reqid_key_cond_map_attrs(self._reqid, self._status, condattrs, condattrs_sz, attrs, attrs_sz)
+            self._client._ops[self._reqid] = self
+        finally:
+            if condattrs:
+                free(condattrs)
+            if attrs:
+                free(attrs)
+
+    def wait(self):
+        Deferred.wait(self)
+        if self._status == HYPERCLIENT_SUCCESS:
+            return True
+        elif self._status == HYPERCLIENT_CMPFAIL:
+            return False
         else:
             raise HyperClientException(self._status)
 
@@ -1188,6 +1322,14 @@ cdef class Range(Predicate):
                                   (HYPERPREDICATE_LESS_EQUAL, upper)])
 
 
+cdef class Contains(Predicate):
+
+    def __init__(self, elem):
+        if type(elem) not in (bytes, int, long, float):
+            raise AttributeError("Contains must be a byte, int, or float")
+        Predicate.__init__(self, [(HYPERPREDICATE_CONTAINS, elem)])
+
+
 cdef class LessEqual(Predicate):
 
     def __init__(self, upper):
@@ -1202,6 +1344,22 @@ cdef class GreaterEqual(Predicate):
         if type(lower) not in (bytes, int, long, float):
             raise AttributeError("GreaterEqual must be a byte, int, or float")
         Predicate.__init__(self, [(HYPERPREDICATE_GREATER_EQUAL, lower)])
+
+
+cdef class Regex(Predicate):
+
+    def __init__(self, regex):
+        if type(regex) != bytes:
+            raise AttributeError("Regex must be a byte")
+        Predicate.__init__(self, [(HYPERPREDICATE_REGEX, regex)])
+
+
+cdef class LengthLessEqual(Predicate):
+
+    def __init__(self, upper):
+        if type(upper) not in (int, long):
+            raise AttributeError("LengthLessEqual must be int or long")
+        Predicate.__init__(self, [(HYPERPREDICATE_LENGTH_LESS_EQUAL, upper)])
 
 
 cdef class Client:
@@ -1234,128 +1392,244 @@ cdef class Client:
         async = self.async_put(space, key, value)
         return async.wait()
 
-    def put_if_not_exist(self, bytes space, key, dict value):
-        async = self.async_put_if_not_exist(space, key, value)
-        return async.wait()
-
     def cond_put(self, bytes space, key, dict condition, dict value):
         async = self.async_cond_put(space, key, condition, value)
+        return async.wait()
+
+    def put_if_not_exist(self, bytes space, key, dict value):
+        async = self.async_put_if_not_exist(space, key, value)
         return async.wait()
 
     def delete(self, bytes space, key):
         async = self.async_delete(space, key)
         return async.wait()
 
+    def cond_delete(self, bytes space, key, dict cond):
+        async = self.async_delete(space, key, cond)
+        return async.wait()
+
     def atomic_add(self, bytes space, key, dict value):
         async = self.async_atomic_add(space, key, value)
+        return async.wait()
+
+    def cond_atomic_add(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_add(space, key, value, cond)
         return async.wait()
 
     def atomic_sub(self, bytes space, key, dict value):
         async = self.async_atomic_sub(space, key, value)
         return async.wait()
 
+    def cond_atomic_sub(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_sub(space, key, value, cond)
+        return async.wait()
+
     def atomic_mul(self, bytes space, key, dict value):
         async = self.async_atomic_mul(space, key, value)
+        return async.wait()
+
+    def cond_atomic_mul(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_mul(space, key, value, cond)
         return async.wait()
 
     def atomic_div(self, bytes space, key, dict value):
         async = self.async_atomic_div(space, key, value)
         return async.wait()
 
+    def cond_atomic_div(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_div(space, key, value, cond)
+        return async.wait()
+
     def atomic_mod(self, bytes space, key, dict value):
         async = self.async_atomic_mod(space, key, value)
+        return async.wait()
+
+    def cond_atomic_mod(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_mod(space, key, value, cond)
         return async.wait()
 
     def atomic_and(self, bytes space, key, dict value):
         async = self.async_atomic_and(space, key, value)
         return async.wait()
 
+    def cond_atomic_and(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_and(space, key, value, cond)
+        return async.wait()
+
     def atomic_or(self, bytes space, key, dict value):
         async = self.async_atomic_or(space, key, value)
+        return async.wait()
+
+    def cond_atomic_or(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_or(space, key, value, cond)
         return async.wait()
 
     def atomic_xor(self, bytes space, key, dict value):
         async = self.async_atomic_xor(space, key, value)
         return async.wait()
 
+    def cond_atomic_xor(self, bytes space, key, dict cond, dict value):
+        async = self.async_atomic_xor(space, key, value, cond)
+        return async.wait()
+
     def string_prepend(self, bytes space, key, dict value):
         async = self.async_string_prepend(space, key, value)
+        return async.wait()
+
+    def cond_string_prepend(self, bytes space, key, dict cond, dict value):
+        async = self.async_string_prepend(space, key, value, cond)
         return async.wait()
 
     def string_append(self, bytes space, key, dict value):
         async = self.async_string_append(space, key, value)
         return async.wait()
 
+    def cond_string_append(self, bytes space, key, dict cond, dict value):
+        async = self.async_string_append(space, key, value, cond)
+        return async.wait()
+
     def list_lpush(self, bytes space, key, dict value):
         async = self.async_list_lpush(space, key, value)
+        return async.wait()
+
+    def cond_list_lpush(self, bytes space, key, dict cond, dict value):
+        async = self.async_list_lpush(space, key, value, cond)
         return async.wait()
 
     def list_rpush(self, bytes space, key, dict value):
         async = self.async_list_rpush(space, key, value)
         return async.wait()
 
+    def cond_list_rpush(self, bytes space, key, dict cond, dict value):
+        async = self.async_list_rpush(space, key, value, cond)
+        return async.wait()
+
     def set_add(self, bytes space, key, dict value):
         async = self.async_set_add(space, key, value)
+        return async.wait()
+
+    def cond_set_add(self, bytes space, key, dict cond, dict value):
+        async = self.async_set_add(space, key, value, cond)
         return async.wait()
 
     def set_remove(self, bytes space, key, dict value):
         async = self.async_set_remove(space, key, value)
         return async.wait()
 
+    def cond_set_remove(self, bytes space, key, dict cond, dict value):
+        async = self.async_set_remove(space, key, value, cond)
+        return async.wait()
+
     def set_intersect(self, bytes space, key, dict value):
         async = self.async_set_intersect(space, key, value)
+        return async.wait()
+
+    def cond_set_intersect(self, bytes space, key, dict cond, dict value):
+        async = self.async_set_intersect(space, key, value, cond)
         return async.wait()
 
     def set_union(self, bytes space, key, dict value):
         async = self.async_set_union(space, key, value)
         return async.wait()
 
+    def cond_set_union(self, bytes space, key, dict cond, dict value):
+        async = self.async_set_union(space, key, value, cond)
+        return async.wait()
+
     def map_add(self, bytes space, key, dict value):
         async = self.async_map_add(space, key, value)
+        return async.wait()
+
+    def cond_map_add(self, bytes space, key, dict cond, dict value):
+        async = self.async_cond_map_add(space, key, cond, value)
         return async.wait()
 
     def map_remove(self, bytes space, key, dict value):
         async = self.async_map_remove(space, key, value)
         return async.wait()
 
+    def cond_map_remove(self, bytes space, key, dict cond, dict value):
+        async = self.async_cond_map_remove(space, key, cond, value)
+        return async.wait()
+
     def map_atomic_add(self, bytes space, key, dict value):
         async = self.async_map_atomic_add(space, key, value)
+        return async.wait()
+
+    def cond_map_atomic_add(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_add(space, key, value, cond)
         return async.wait()
 
     def map_atomic_sub(self, bytes space, key, dict value):
         async = self.async_map_atomic_sub(space, key, value)
         return async.wait()
 
+    def cond_map_atomic_sub(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_sub(space, key, value, cond)
+        return async.wait()
+
     def map_atomic_mul(self, bytes space, key, dict value):
         async = self.async_map_atomic_mul(space, key, value)
+        return async.wait()
+
+    def cond_map_atomic_mul(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_mul(space, key, value, cond)
         return async.wait()
 
     def map_atomic_div(self, bytes space, key, dict value):
         async = self.async_map_atomic_div(space, key, value)
         return async.wait()
 
+    def cond_map_atomic_div(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_div(space, key, value, cond)
+        return async.wait()
+
     def map_atomic_mod(self, bytes space, key, dict value):
         async = self.async_map_atomic_mod(space, key, value)
+        return async.wait()
+
+    def cond_map_atomic_mod(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_mod(space, key, value, cond)
         return async.wait()
 
     def map_atomic_and(self, bytes space, key, dict value):
         async = self.async_map_atomic_and(space, key, value)
         return async.wait()
 
+    def cond_map_atomic_and(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_and(space, key, value, cond)
+        return async.wait()
+
     def map_atomic_or(self, bytes space, key, dict value):
         async = self.async_map_atomic_or(space, key, value)
+        return async.wait()
+
+    def cond_map_atomic_or(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_or(space, key, value, cond)
         return async.wait()
 
     def map_atomic_xor(self, bytes space, key, dict value):
         async = self.async_map_atomic_xor(space, key, value)
         return async.wait()
 
+    def cond_map_atomic_xor(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_atomic_xor(space, key, value, cond)
+        return async.wait()
+
     def map_string_prepend(self, bytes space, key, dict value):
         async = self.async_map_string_prepend(space, key, value)
         return async.wait()
 
+    def cond_map_string_prepend(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_string_prepend(space, key, value, cond)
+        return async.wait()
+
     def map_string_append(self, bytes space, key, dict value):
         async = self.async_map_string_append(space, key, value)
+        return async.wait()
+
+    def cond_map_string_append(self, bytes space, key, dict cond, dict value):
+        async = self.async_map_string_append(space, key, value, cond)
         return async.wait()
 
     def search_describe(self, bytes space, dict predicate, bool unsafe=False):
@@ -1390,15 +1664,25 @@ cdef class Client:
         d.setcmp()
         return d
 
-    def async_cond_put(self, bytes space, key, dict condition, dict value):
-        return DeferredCondPut(self, space, key, condition, value)
+    def async_cond_put(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_put, space, key, cond, value)
+        return d
 
     def async_delete(self, bytes space, key):
         return DeferredDelete(self, space, key)
 
+    def async_cond_delete(self, bytes space, key, cond):
+        return DeferredCondDelete(self, space, key, cond)
+
     def async_atomic_add(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_atomic_add, space, key, value)
+        return d
+
+    def async_cond_atomic_add(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_add, space, key, cond, value)
         return d
 
     def async_atomic_sub(self, bytes space, key, dict value):
@@ -1406,9 +1690,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_atomic_sub, space, key, value)
         return d
 
+    def async_cond_atomic_sub(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_sub, space, key, cond, value)
+        return d
+
     def async_atomic_mul(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_atomic_mul, space, key, value)
+        return d
+
+    def async_cond_atomic_mul(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_mul, space, key, cond, value)
         return d
 
     def async_atomic_div(self, bytes space, key, dict value):
@@ -1416,9 +1710,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_atomic_div, space, key, value)
         return d
 
+    def async_cond_atomic_div(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_div, space, key, cond, value)
+        return d
+
     def async_atomic_mod(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_atomic_mod, space, key, value)
+        return d
+
+    def async_cond_atomic_mod(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_mod, space, key, cond, value)
         return d
 
     def async_atomic_and(self, bytes space, key, dict value):
@@ -1426,9 +1730,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_atomic_and, space, key, value)
         return d
 
+    def async_cond_atomic_and(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_and, space, key, cond, value)
+        return d
+
     def async_atomic_or(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_atomic_or, space, key, value)
+        return d
+
+    def async_cond_atomic_or(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_or, space, key, cond, value)
         return d
 
     def async_atomic_xor(self, bytes space, key, dict value):
@@ -1436,9 +1750,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_atomic_xor, space, key, value)
         return d
 
+    def async_cond_atomic_xor(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_atomic_xor, space, key, cond, value)
+        return d
+
     def async_string_prepend(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_string_prepend, space, key, value)
+        return d
+
+    def async_cond_string_prepend(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_string_prepend, space, key, cond, value)
         return d
 
     def async_string_append(self, bytes space, key, dict value):
@@ -1446,9 +1770,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_string_append, space, key, value)
         return d
 
+    def async_cond_string_append(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_string_append, space, key, cond, value)
+        return d
+
     def async_list_lpush(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_list_lpush, space, key, value)
+        return d
+
+    def async_cond_list_lpush(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_list_lpush, space, key, cond, value)
         return d
 
     def async_list_rpush(self, bytes space, key, dict value):
@@ -1456,9 +1790,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_list_rpush, space, key, value)
         return d
 
+    def async_cond_list_rpush(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_list_rpush, space, key, cond, value)
+        return d
+
     def async_set_add(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_set_add, space, key, value)
+        return d
+
+    def async_cond_set_add(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_set_add, space, key, cond, value)
         return d
 
     def async_set_remove(self, bytes space, key, dict value):
@@ -1466,9 +1810,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_set_remove, space, key, value)
         return d
 
+    def async_cond_set_remove(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_set_remove, space, key, cond, value)
+        return d
+
     def async_set_intersect(self, bytes space, key, dict value):
         d = DeferredFromAttrs(self)
         d.call(<hyperclient_simple_op> hyperclient_set_intersect, space, key, value)
+        return d
+
+    def async_cond_set_intersect(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_set_intersect, space, key, cond, value)
         return d
 
     def async_set_union(self, bytes space, key, dict value):
@@ -1476,9 +1830,19 @@ cdef class Client:
         d.call(<hyperclient_simple_op> hyperclient_set_union, space, key, value)
         return d
 
+    def async_cond_set_union(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_set_union, space, key, cond, value)
+        return d
+
     def async_map_add(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_add, space, key, value)
+        return d
+
+    def async_cond_map_add(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_add, space, key, cond, value)
         return d
 
     def async_map_remove(self, bytes space, key, dict value):
@@ -1486,9 +1850,19 @@ cdef class Client:
         d.call(<hyperclient_map_op> hyperclient_map_remove, space, key, value)
         return d
 
+    def async_cond_map_remove(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondFromAttrs(self)
+        d.call(<hyperclient_cond_op> hyperclient_cond_map_remove, space, key, cond, value)
+        return d
+
     def async_map_atomic_add(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_atomic_add, space, key, value)
+        return d
+
+    def async_cond_map_atomic_add(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_add, space, key, cond, value)
         return d
 
     def async_map_atomic_sub(self, bytes space, key, dict value):
@@ -1496,9 +1870,19 @@ cdef class Client:
         d.call(<hyperclient_map_op> hyperclient_map_atomic_sub, space, key, value)
         return d
 
+    def async_cond_map_atomic_sub(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_sub, space, key, cond, value)
+        return d
+
     def async_map_atomic_mul(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_atomic_mul, space, key, value)
+        return d
+
+    def async_cond_map_atomic_mul(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_mul, space, key, cond, value)
         return d
 
     def async_map_atomic_div(self, bytes space, key, dict value):
@@ -1506,9 +1890,19 @@ cdef class Client:
         d.call(<hyperclient_map_op> hyperclient_map_atomic_div, space, key, value)
         return d
 
+    def async_cond_map_atomic_div(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_div, space, key, cond, value)
+        return d
+
     def async_map_atomic_mod(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_atomic_mod, space, key, value)
+        return d
+
+    def async_cond_map_atomic_mod(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_mod, space, key, cond, value)
         return d
 
     def async_map_atomic_and(self, bytes space, key, dict value):
@@ -1516,9 +1910,19 @@ cdef class Client:
         d.call(<hyperclient_map_op> hyperclient_map_atomic_and, space, key, value)
         return d
 
+    def async_cond_map_atomic_and(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_and, space, key, cond, value)
+        return d
+
     def async_map_atomic_or(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_atomic_or, space, key, value)
+        return d
+
+    def async_cond_map_atomic_or(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_or, space, key, cond, value)
         return d
 
     def async_map_atomic_xor(self, bytes space, key, dict value):
@@ -1526,14 +1930,29 @@ cdef class Client:
         d.call(<hyperclient_map_op> hyperclient_map_atomic_xor, space, key, value)
         return d
 
+    def async_cond_map_atomic_xor(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_atomic_xor, space, key, cond, value)
+        return d
+
     def async_map_string_prepend(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_string_prepend, space, key, value)
         return d
 
+    def async_cond_map_string_prepend(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_string_prepend, space, key, cond, value)
+        return d
+
     def async_map_string_append(self, bytes space, key, dict value):
         d = DeferredMapOp(self)
         d.call(<hyperclient_map_op> hyperclient_map_string_append, space, key, value)
+        return d
+
+    def async_cond_map_string_append(self, bytes space, key, dict cond, dict value):
+        d = DeferredCondMapOp(self)
+        d.call(<hyperclient_cond_map_op> hyperclient_cond_map_string_append, space, key, cond, value)
         return d
 
     def async_search_describe(self, bytes space, dict predicate, bool unsafe=False):

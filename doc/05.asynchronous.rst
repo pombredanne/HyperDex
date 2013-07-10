@@ -1,7 +1,7 @@
 .. _asynchronous:
 
-Asynchronous and Atomic Operations
-==================================
+Asynchronous Operations
+=======================
 
 Thus far, all HyperDex operations we've seen are *synchronous*, that is, the
 application calls the HyperDex operation and blocks until the operation is
@@ -198,154 +198,59 @@ friend of John can be done in parallel:
 
 Using the :py:meth:`hyperclient.Client.loop()` method, it is possible to issue
 thousands of requests and then wait for each one in turn without having to
-serialize the round trips to the server.  Of course, you'll probably want to
-keep a fixed-size window of outstanding requests so as to not issue too many
-operations concurrently.
+serialize the round trips to the server.  
 
-Note that HyperDex may choose to execute concurrent asynchronous operations in
-any order.  It's up to the programmer to order requests by calling ``wait``
-appropriately.
+Potential Pitfalls
+------------------
 
-Atomic Read-Modify-Write Operations
------------------------------------
+Keep in mind that HyperDex may (and will!) maximize 
+performance by executing concurrent asynchronous operations in any order. 
+If a client wants to ensure that an operation B is performed only 
+after asynchronous operation A is committed to the data store, that
+client needs to call wait() on A. When wait() returns success, the
+client is guaranteed that HyperDex has committed the data to sufficiently 
+many replicas to tolerate the number of failures in the space definition.
 
-Atomic read-modify-write operations enable concurrent applications that would
-otherwise be impossible to implement correctly. For instance, an application
-which performs a ``get`` request followed by a ``get`` to the same key is not
-guaranteed to have these two requests operate immediately back to back, even if
-the client is using synchronous operations, as other clients may issue requests
-to the key in the mean time.
+On a related note, a client that has not explicitly performed a wait() on 
+an outstanding asynchronous operation should not assume anything about
+the disposition of those operations. Specifically, the queued asynchronous
+operations may not have made it to any of the servers, and therefore may not be committed anywhere. A client that simply issues asynchronous requests and terminates without calling wait() on them is not guaranteed to have any of those
+asynchronous operations execute. Unless the system explicitly tells a client
+that the data is committed, it is not safe to assume that it will be committed 
+behind the scenes. (The flip-side of this is that, when HyperDex says the data is committed, it really is committed to sufficiently many replicas to withstand
+the number of simultaneous failures in the space specification).
 
-The canonical example here involves two clients who are both trying to update a
-salary field. One is trying to deduct taxes -- let's assume that they are
-hard-working academics being taxed at the maximum rate of 36%, not the cushy 15%
-that people on Wall Street seem to pay.  The other client is trying to add a
-$1500 teaching award to the yearly salary. So one client will be doing
-v1=GET(salary), v1 = v1 - 0.36*v1; PUT(salary, v1). The other client will be
-doing v2=GET(salary), v2 += 1500; PUT(salary, v2), where v1 and v2 are variables
-local to each client. Since these GET and PUT operations can be interleaved in
-any order, it is possible for the clients to succeed (so both the deduction and
-the raise are issued) and yet for the salary to not reflect the results! If the
-sequence is GET from client1/GET from client2/PUT from client2/PUT from client1,
-the raise will be overwritten. We certainly cannot have that!
+A Common Window Pattern
+-----------------------
 
-Atomic read-modify-write operations provide a solution to this problem.  Such
-operations are guaranteed to execute without interference from other operations.
-The operation ensures that the read-modify-write sequence that comprises the
-operation is executed in a manner that cannot be interrupted by or interleaved
-with any other operation. The entire block is one atomic unit.
-
-HyperDex supports a few different types of atomic instructions. Perhaps the most
-general one is the ``cond_put``.  A ``cond_put`` performs an ``put`` if and only
-if the value being updated matches a condition specified along with the new
-values to be inserted.
-
-In our example, let's say the application wants to change John Smith's name to
-Jon Smith only if his name is unchanged, but wants the application to fail if
-the application has changed his name since it was last read:
+The last point necessitates a common pattern, where a client will
+want to keep a fixed-size window of outstanding requests so as to
+not issue too many operations concurrently, and will appropriately
+wait for all asynchronous operations to complete. Such code 
+will look, approximately, like this: 
 
 .. sourcecode:: pycon
 
-   >>> c.get('friendlists', 'jsmith1')
-   {'first': 'John', 'last': 'Smith', 'friends': set(['bjones1', 'jd', 'jj'])}
-   >>> c.cond_put('friendlists', 'jsmith1',
-   ...            {'first': 'John', 'last': 'Smith'},
-   ...            {'first': 'Jon'})
-   True
-   >>> c.get('friendlists', 'jsmith1')
-   {'first': 'Jon', 'last': 'Smith', 'friends': set(['bjones1', 'jd', 'jj'])}
+   c = hyperclient.Client(...)
+   outstanding = 0
+   for line in file:
+       while outstanding >= 1024: # 1024 is window size
+           d = c.loop()
+           d.wait()
+           outstanding -= 1
+       parse line and issue put
+       outstanding += 1
+   # flush remaining
+   while outstanding > 0:
+       d = c.loop()
+       d.wait()
+       outstanding -= 1
 
-Here we told HyperDex to update John's name if and only if it is currently equal
-to "John".  The third argument is a set of attributes that must match the object
-for the update to succeed.  The fourth argument takes the same form as a typical
-``put``.
-
-Not surprisingly, this request succeeded, as John's phone number matched the
-specified values. Let's try issuing the same operation again.
-
-.. sourcecode:: pycon
-
-   >>> c.cond_put('friendlists', 'jsmith1',
-   ...            {'first': 'John', 'last': 'Smith'},
-   ...            {'first': 'Jon'})
-   False
-
-Notice that ``cond_put`` failed because the value of the first name
-field is no longer "John".
-
-Note that the last argument has the same generality as the arguments to a
-regular ``put`` operation. So there is no requirement that a
-``cond_put`` check and update the same field. The following is a
-perfectly legitimate operation that updates the first name field of Jon's
-profile if and only if his phone number has not changed:
-
-.. sourcecode:: pycon
-
-   >>> c.cond_put('friendlists', 'jsmith1',
-   ...            {'friends': set(['bjones1', 'jd', 'jj'])},
-   ...            {'first': 'John'})
-   True
-   >>> c.get('friendlists', 'jsmith1')
-   {'first': 'John', 'last': 'Smith', 'friends': set(['bjones1', 'jd', 'jj'])}
-
-The great thing about HyperDex is that ``cond_put`` operations are
-fast.  In fact, their performance is indistinguishable from a normal ``put``,
-all else being equal.  Thus, you can rely heavily upon ``cond_put``
-operations to avoid race conditions without sacrificing performance.
-Going a step further, it's possible to use ``async_cond_put`` operations to
-achieve even more concurrency without losing correctness.
-
-Keep in mind that ``cond_put`` operations can and will fail, as intended, if
-there are interceding operations that update the object fields that must match.
-In these cases, the client will typically want to re-fetch the object,
-re-perform its updates, and re-submit the conditional operation.
-
-Another useful atomic primitive HyperDex provides is the ``put_if_not_exist``
-operation.  This operation succeeds if and only if the object does not already
-exist.  This can be useful to implement locking behavior.  For example, a simple
-lock space can be used to provide per-user locking:
-
-.. sourcecode:: pycon
-
-   >>> c.add_space('''
-   ... space userlocks
-   ... key username
-   ... ''')
-
-With this space, we can atomically check if an object exists, creating it in the
-process; or fail the operation, leaving the object unchanged.
-
-.. sourcecode:: pycon
-
-   >>> c.put_if_not_exist('userlocks', 'jsmith1', {})
-   True
-   >>> c.get('userlocks', 'jsmith1')
-   {}
-   >>> c.put_if_not_exist('userlocks', 'jsmith1', {})
-   False
-   >>> c.delete('userlocks', 'jsmith1')
-   True
-
-This operation approximates the test-and-set mechanism used for implementing
-concurrency controls in memory.  It's easy to build ``lock()`` and ``unlock()``
-using these controls:
-
-.. sourcecode:: pycon
-
-   >>> def lock(client, user):
-   ...     while not client.put_if_not_exist('userlocks', user, {}):
-   ...         pass
-   >>> def unlock(client, user):
-   ...     client.delete('userlocks', user)
-   >>> lock(c, 'jsmith1')
-   >>> unlock(c, 'jsmith1')
-
-Note that a real implementation might want to make provisions for when clients
-fail while holding the lock.
 
 .. todo::
 
    .. sourcecode:: pycon
 
+      >>> # a hack to clean up the tutorial, not a real TODO
       >>> c.rm_space('''friendlists''')
       >>> c.rm_space('''userlocks''')

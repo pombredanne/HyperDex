@@ -33,8 +33,7 @@
 
 /* Datatype occupies [9216, 9728)
  * The chosen constants are significant as they allow properties of the datatype
- * to be determined with simple mask operations.  See datatypes/coercion.{h,cc}
- * for more information.
+ * to be determined with simple mask operations.
  */
 
 #define CONTAINER_TYPE(X) ((X) & 9664)
@@ -43,7 +42,7 @@
 #define CONTAINER_KEY(X) ((((X) & 56) >> 3) | ((X) & 9216))
 #define IS_PRIMITIVE(X) (CONTAINER_TYPE(X) == HYPERDATATYPE_GENERIC)
 #define CREATE_CONTAINER(C, E) ((enum hyperdatatype)((C) | (E & 7)))
-#define CREATE_CONTAINER2(C, K, V) ((enum hyperdatatype)((C) | ((K & 56) >> 3) | (V & 7)))
+#define CREATE_CONTAINER2(C, K, V) ((enum hyperdatatype)((C) | ((K & 7) << 3) | (V & 7)))
 
 enum hyperdatatype
 {
@@ -90,7 +89,13 @@ enum hyperpredicate
     HYPERPREDICATE_FAIL          = 9728,
     HYPERPREDICATE_EQUALS        = 9729,
     HYPERPREDICATE_LESS_EQUAL    = 9730,
-    HYPERPREDICATE_GREATER_EQUAL = 9731
+    HYPERPREDICATE_GREATER_EQUAL = 9731,
+    HYPERPREDICATE_CONTAINS_LESS_THAN = 9732, // alias of HYPERPREDICATE_LENGTH_LESS_EQUAL
+    HYPERPREDICATE_REGEX         = 9733,
+    HYPERPREDICATE_LENGTH_EQUALS        = 9734,
+    HYPERPREDICATE_LENGTH_LESS_EQUAL    = 9735,
+    HYPERPREDICATE_LENGTH_GREATER_EQUAL = 9736,
+    HYPERPREDICATE_CONTAINS      = 9737
 };
 
 #ifdef __cplusplus

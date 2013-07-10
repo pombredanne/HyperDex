@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Cornell University
+// Copyright (c) 2012-2013, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -26,64 +26,79 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // HyperDex
-#include "client/constants.h"
-#include "client/complete.h"
 #include "client/pending_count.h"
-#include "client/util.h"
 
-hyperclient :: pending_count :: pending_count(int64_t count_id,
-                                              e::intrusive_ptr<refcount> ref,
-                                              hyperclient_returncode* status,
-                                              uint64_t* result)
-    : pending(status)
-    , m_ref(ref)
-    , m_result(result)
-{
-    this->set_client_visible_id(count_id);
-}
+using hyperdex::pending_count;
 
-hyperclient :: pending_count :: ~pending_count() throw ()
+pending_count :: pending_count(uint64_t id,
+                               hyperclient_returncode* status,
+                               uint64_t* count)
+    : pending_aggregation(id, status)
+    , m_error(HYPERCLIENT_SUCCESS)
+    , m_count(count)
+    , m_done(false)
 {
 }
 
-hyperdex::network_msgtype
-hyperclient :: pending_count :: request_type()
+pending_count :: ~pending_count() throw ()
 {
-    return hyperdex::REQ_COUNT;
 }
 
-int64_t
-hyperclient :: pending_count :: handle_response(hyperclient* cl,
-                                                const hyperdex::server_id& sender,
-                                                std::auto_ptr<e::buffer> msg,
-                                                hyperdex::network_msgtype type,
-                                                hyperclient_returncode* status)
+bool
+pending_count :: can_yield()
+{
+    return this->aggregation_done() && !m_done;
+}
+
+bool
+pending_count :: yield(hyperclient_returncode* status)
 {
     *status = HYPERCLIENT_SUCCESS;
+    assert(this->can_yield());
+    m_done = true;
+    set_status(m_error);
+    return true;
+}
 
-    if (type != hyperdex::RESP_COUNT)
+void
+pending_count :: handle_failure(const server_id& si,
+                                const virtual_server_id& vsi)
+{
+    m_error = HYPERCLIENT_RECONFIGURE;
+    return pending_aggregation::handle_failure(si, vsi);
+}
+
+bool
+pending_count :: handle_message(client* cl,
+                                const server_id& si,
+                                const virtual_server_id& vsi,
+                                network_msgtype mt,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up,
+                                hyperclient_returncode* status)
+{
+    if (!pending_aggregation::handle_message(cl, si, vsi, mt, std::auto_ptr<e::buffer>(), up, status))
     {
-        cl->killall(sender, HYPERCLIENT_SERVERERROR);
-        return 0;
+        return false;
     }
 
-    e::unpacker up = msg->unpack_from(HYPERCLIENT_HEADER_SIZE_RESP);
-    uint64_t result;
-    up = up >> result;
-    *m_result += result;
+    *status = HYPERCLIENT_SUCCESS;
+
+    if (mt != RESP_COUNT)
+    {
+        m_error = HYPERCLIENT_SERVERERROR; 
+        return true;
+    }
+
+    uint64_t local_count;
+    up = up >> local_count;
 
     if (up.error())
     {
-        cl->killall(sender, HYPERCLIENT_SERVERERROR);
-        return 0;
+        m_error = HYPERCLIENT_SERVERERROR; 
+        return true;
     }
 
-    if (m_ref->last_reference())
-    {
-        return client_visible_id();
-    }
-    else
-    {
-        return 0;
-    }
+    *m_count += local_count;
+    return true;
 }

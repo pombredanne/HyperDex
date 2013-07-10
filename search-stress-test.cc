@@ -28,13 +28,96 @@
 // Popt
 #include <popt.h>
 
+// STL
+#include <vector>
+
+// po6
+#include <po6/error.h>
+#include <po6/net/ipaddr.h>
+
 // e
 #include <e/endian.h>
 #include <e/guard.h>
 
 // HyperDex
-#include "client/hyperclient.h"
-#include "test/common.h"
+#include "hyperdex.h"
+#include "client/hyperclient.hpp"
+
+const char* hyperdex_test_space = NULL;
+const char* hyperdex_test_host = "127.0.0.1";
+long hyperdex_test_port = 1234;
+
+extern "C"
+{
+
+struct poptOption hyperdex_test_popts[] = {
+    {"space", 's', POPT_ARG_STRING, &hyperdex_test_space, 's',
+        "the HyperDex space to use",
+        "space"},
+    {"host", 'h', POPT_ARG_STRING, &hyperdex_test_host, 'h',
+        "connect to an IP address or hostname (default: 127.0.0.1)",
+        "addr"},
+    {"port", 'p', POPT_ARG_LONG, &hyperdex_test_port, 'p',
+        "connect to an alternative port (default: 1982)",
+        "port"},
+    POPT_TABLEEND
+};
+
+} // extern "C"
+
+#define HYPERDEX_TEST_TABLE {NULL, 0, POPT_ARG_INCLUDE_TABLE, hyperdex_test_popts, 0, "Connect to a cluster:", NULL},
+
+#define HYPERDEX_TEST_POPT_SWITCH \
+    case 's': \
+        break; \
+    case 'h': \
+        try \
+        { \
+            po6::net::ipaddr tst(hyperdex_test_host); \
+        } \
+        catch (po6::error& e) \
+        { \
+            std::cerr << "cannot parse coordinator address" << std::endl; \
+            return EXIT_FAILURE; \
+        } \
+        catch (std::invalid_argument& e) \
+        { \
+            std::cerr << "cannot parse coordinator address" << std::endl; \
+            return EXIT_FAILURE; \
+        } \
+        break; \
+    case 'p': \
+        if (hyperdex_test_port < 0 || hyperdex_test_port >= (1 << 16)) \
+        { \
+            std::cerr << "port number out of range for TCP" << std::endl; \
+            return EXIT_FAILURE; \
+        } \
+        break; \
+    case POPT_ERROR_NOARG: \
+    case POPT_ERROR_BADOPT: \
+    case POPT_ERROR_BADNUMBER: \
+    case POPT_ERROR_OVERFLOW: \
+        std::cerr << poptStrerror(rc) << " " << poptBadOption(poptcon, 0) << std::endl; \
+        return EXIT_FAILURE; \
+    case POPT_ERROR_OPTSTOODEEP: \
+    case POPT_ERROR_BADQUOTE: \
+    case POPT_ERROR_ERRNO: \
+    default: \
+        std::cerr << "logic error in argument parsing" << std::endl; \
+        return EXIT_FAILURE;
+
+#define HYPERDEX_TEST_SUCCESS(TESTNO) \
+    do { \
+        std::cout << "Test " << TESTNO << ":  [\x1b[32mOK\x1b[0m]\n"; \
+    } while (0)
+
+#define HYPERDEX_TEST_FAIL(TESTNO, REASON) \
+    do { \
+        std::cout << "Test " << TESTNO << ":  [\x1b[31mFAIL\x1b[0m]\n" \
+                  << "location: " << __FILE__ << ":" << __LINE__ << "\n" \
+                  << "reason:  " << REASON << "\n"; \
+    abort(); \
+    } while (0)
 
 #define SEARCH_STRESS_TIMEOUT(TESTNO) (10000)
 
@@ -60,7 +143,7 @@ static struct poptOption popts[] = {
 } // extern "C"
 
 static void
-test(hyperclient* cl);
+test(HyperClient* cl);
 
 int
 main(int argc, const char* argv[])
@@ -81,7 +164,7 @@ main(int argc, const char* argv[])
 
     try
     {
-        hyperclient cl(hyperdex_test_host, hyperdex_test_port);
+        HyperClient cl(hyperdex_test_host, hyperdex_test_port);
 
         if (!hyperdex_test_space)
         {
@@ -116,42 +199,42 @@ main(int argc, const char* argv[])
 
 static void
 empty(size_t testno,
-      hyperclient* cl);
+      HyperClient* cl);
 
 static void
 populate(size_t testno,
-         hyperclient* cl);
+         HyperClient* cl);
 
 static void
 search(size_t testno,
-       hyperclient* cl,
+       HyperClient* cl,
        const struct hyperclient_attribute_check* checks, size_t checks_sz,
        const std::vector<bool>& expected);
 
 static void
 sorted_search(size_t testno,
-              hyperclient* cl,
+              HyperClient* cl,
               const struct hyperclient_attribute_check* checks, size_t checks_sz,
               const std::vector<bool>& expected);
 
 static void
 group_del(size_t testno,
-          hyperclient* cl,
+          HyperClient* cl,
           const struct hyperclient_attribute_check* checks, size_t checks_sz);
 
 static void
 count(size_t testno,
-      hyperclient* cl,
+      HyperClient* cl,
       const struct hyperclient_attribute_check* checks, size_t checks_sz,
       size_t expected);
 
 static void
 all_search_tests(size_t testno,
-                 hyperclient* cl,
+                 HyperClient* cl,
                  const std::vector<bool>& expecting);
 
 void
-test(hyperclient* cl)
+test(HyperClient* cl)
 {
     group_del(16, cl, NULL, 0); // clear everything
     srand(0xdeadbeef); // yes, I know rand+mod is bad
@@ -217,7 +300,7 @@ test(hyperclient* cl)
 
 void
 empty(size_t testno,
-      hyperclient* cl)
+      HyperClient* cl)
 {
     count(testno, cl, NULL, 0, 0);
     std::vector<bool> expected(1ULL << testno, false);
@@ -227,7 +310,7 @@ empty(size_t testno,
 
 static void
 populate(size_t testno,
-         hyperclient* cl)
+         HyperClient* cl)
 {
     for (uint64_t number = 0; number < (1ULL << testno); ++number)
     {
@@ -300,7 +383,7 @@ populate(size_t testno,
 
 void
 search(size_t testno,
-       hyperclient* cl,
+       HyperClient* cl,
        const struct hyperclient_attribute_check* checks, size_t checks_sz,
        const std::vector<bool>& expected)
 {
@@ -448,7 +531,7 @@ search(size_t testno,
 
 void
 sorted_search(size_t testno,
-              hyperclient* cl,
+              HyperClient* cl,
               const struct hyperclient_attribute_check* checks, size_t checks_sz,
               const std::vector<bool>& expected)
 {
@@ -605,7 +688,7 @@ sorted_search(size_t testno,
 
 static void
 group_del(size_t testno,
-          hyperclient* cl,
+          HyperClient* cl,
           const struct hyperclient_attribute_check* checks, size_t checks_sz)
 {
     hyperclient_returncode gstatus;
@@ -637,7 +720,7 @@ group_del(size_t testno,
 
 static void
 count(size_t testno,
-      hyperclient* cl,
+      HyperClient* cl,
       const struct hyperclient_attribute_check* checks, size_t checks_sz,
       size_t expected)
 {
@@ -717,7 +800,7 @@ setup_random_search(size_t,
 
 void
 all_search_tests(size_t testno,
-                 hyperclient* cl,
+                 HyperClient* cl,
                  const std::vector<bool>& expecting)
 {
     search(testno, cl, NULL, 0, expecting);

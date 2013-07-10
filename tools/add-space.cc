@@ -9,7 +9,7 @@
 //     * Redistributions in binary form must reproduce the above copyright
 //       notice, this list of conditions and the following disclaimer in the
 //       documentation and/or other materials provided with the distribution.
-//     * Neither the name of Replicant nor the names of its contributors may be
+//     * Neither the name of HyperDex nor the names of its contributors may be
 //       used to endorse or promote products derived from this software without
 //       specific prior written permission.
 //
@@ -35,7 +35,7 @@
 #include <e/guard.h>
 
 // HyperDex
-#include "client/hyperclient.h"
+#include "client/hyperclient.hpp"
 #include "tools/common.h"
 
 static struct poptOption popts[] = {
@@ -116,7 +116,7 @@ main(int argc, const char* argv[])
 
     try
     {
-        hyperclient h(_connect_host, _connect_port);
+        HyperClient h(_connect_host, _connect_port);
         hyperclient_returncode e = h.add_space(description.c_str());
 
         if (e != HYPERCLIENT_SUCCESS)
