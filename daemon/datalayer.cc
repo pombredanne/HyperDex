@@ -41,10 +41,6 @@
 // Google Log
 #include <glog/logging.h>
 
-// LevelDB
-#include <leveldb/write_batch.h>
-#include <leveldb/filter_policy.h>
-
 // e
 #include <e/endian.h>
 
@@ -58,11 +54,11 @@
 #include "datatypes/apply.h"
 #include "datatypes/microerror.h"
 
-// ASSUME:  all keys put into leveldb have a first byte without the high bit set
+// ASSUME:  all keys put into db have a first byte without the high bit set
 
 using std::tr1::placeholders::_1;
 using hyperdex::datalayer;
-using hyperdex::leveldb_snapshot_ptr;
+using hyperdex::db_snapshot_ptr;
 using hyperdex::reconfigure_returncode;
 
 datalayer :: datalayer(daemon* d)
@@ -91,8 +87,11 @@ datalayer :: setup(const po6::pathname& path,
                    bool* saved,
                    server_id* saved_us,
                    po6::net::location* saved_bind_to,
-                   po6::net::hostname* saved_coordinator)
+                   po6::net::hostname* saved_coordinator,
+				   unsigned threads,
+				   unsigned maxsize)
 {
+	size_t msize = (size_t)maxsize * 1024ULL * 1024ULL;
     leveldb::Options opts;
     opts.write_buffer_size = 64ULL * 1024ULL * 1024ULL;
     opts.create_if_missing = true;

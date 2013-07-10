@@ -36,8 +36,8 @@
 #include <tr1/memory>
 #include <vector>
 
-// LevelDB
-#include <leveldb/db.h>
+// Lightning MDB
+#include <lmdb.h>
 
 // po6
 #include <po6/net/hostname.h>
@@ -53,7 +53,7 @@
 #include "common/counter_map.h"
 #include "common/ids.h"
 #include "common/schema.h"
-#include "daemon/leveldb.h"
+//#include "daemon/leveldb.h"
 #include "daemon/reconfigure_returncode.h"
 
 namespace hyperdex
@@ -72,7 +72,7 @@ class datalayer
             BAD_SEARCH,
             CORRUPTION,
             IO_ERROR,
-            LEVELDB_ERROR
+            DB_ERROR
         };
         class reference;
         class region_iterator;
@@ -87,7 +87,9 @@ class datalayer
                    bool* saved,
                    server_id* saved_us,
                    po6::net::location* saved_bind_to,
-                   po6::net::hostname* saved_coordinator);
+                   po6::net::hostname* saved_coordinator,
+				   unsigned threads,
+				   unsigned maxsize);
         void teardown();
         // perform one-time initialization of the db (call after "setup").
         // requires that "saved" was false in "setup".

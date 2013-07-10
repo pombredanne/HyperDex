@@ -66,7 +66,8 @@ class daemon
                 po6::net::location bind_to,
                 bool set_coordinator,
                 po6::net::hostname coordinator,
-                unsigned threads);
+                unsigned threads,
+				unsigned maxsize);
 
     private:
         void loop();

@@ -126,7 +126,8 @@ daemon :: run(bool daemonize,
               po6::net::location bind_to,
               bool set_coordinator,
               po6::net::hostname coordinator,
-              unsigned threads)
+              unsigned threads,
+			  unsigned maxsize)
 {
     if (!install_signal_handler(SIGHUP, exit_on_signal))
     {
@@ -180,7 +181,8 @@ daemon :: run(bool daemonize,
     po6::net::hostname saved_coordinator;
     LOG(INFO) << "initializing persistent storage";
 
-    if (!m_data.setup(data, &saved, &saved_us, &saved_bind_to, &saved_coordinator))
+    if (!m_data.setup(data, &saved, &saved_us, &saved_bind_to, &saved_coordinator,
+		threads, maxsize))
     {
         return EXIT_FAILURE;
     }

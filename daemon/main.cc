@@ -54,6 +54,7 @@ static const char* _coordinator_host = "127.0.0.1";
 static unsigned long _coordinator_port = 1982;
 static bool _coordinator = false;
 static long _threads = 0;
+static long _maxsize = 100;	/* MBytes */
 
 extern "C"
 {
@@ -82,6 +83,9 @@ static struct poptOption popts[] = {
     {"threads", 't', POPT_ARG_LONG, &_threads, 't',
      "the number of threads which will handle network traffic",
      "N"},
+    {"size", 's', POPT_ARG_LONG, &_maxsize, 's',
+     "maximum size of the data store (default 100MB)",
+     "MB"},
     POPT_TABLEEND
 };
 
@@ -204,7 +208,7 @@ main(int argc, const char* argv[])
             return EXIT_FAILURE;
         }
 
-        return d.run(_daemonize, data, _listen, bind_to, _coordinator, coord, _threads);
+        return d.run(_daemonize, data, _listen, bind_to, _coordinator, coord, _threads, _maxsize);
     }
     catch (po6::error& e)
     {
