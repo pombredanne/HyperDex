@@ -213,7 +213,7 @@ search_manager :: start(const server_id& from,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
             LOG(ERROR) << "could not make snapshot for search:  " << rc;
             return;
         default:
@@ -428,7 +428,7 @@ search_manager :: sorted_search(const server_id& from,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
             LOG(ERROR) << "could not make snapshot for search:  " << rc;
             break;
         default:
@@ -501,7 +501,7 @@ search_manager :: group_keyop(const server_id& from,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
             LOG(ERROR) << "could not make snapshot for search:  " << rc;
             result = UINT64_MAX;
             break;
@@ -568,7 +568,7 @@ search_manager :: count(const server_id& from,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
             LOG(ERROR) << "could not make snapshot for search:  " << rc;
             result = UINT64_MAX;
             break;
@@ -619,7 +619,7 @@ search_manager :: search_describe(const server_id& from,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
             LOG(ERROR) << "could not make snapshot for search:  " << rc;
             break;
         default:

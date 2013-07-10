@@ -418,7 +418,7 @@ state_transfer_manager :: transfer_more_state(transfer_out_state* tos)
                 case datalayer::BAD_ENCODING:
                 case datalayer::CORRUPTION:
                 case datalayer::IO_ERROR:
-                case datalayer::LEVELDB_ERROR:
+                case datalayer::DB_ERROR:
                     LOG(ERROR) << "state transfer caused error " << rc;
                     break;
                 default:
@@ -508,7 +508,7 @@ state_transfer_manager :: put_to_disk_and_send_acks(transfer_in_state* tis)
                     case datalayer::BAD_ENCODING:
                     case datalayer::CORRUPTION:
                     case datalayer::IO_ERROR:
-                    case datalayer::LEVELDB_ERROR:
+                    case datalayer::DB_ERROR:
                         LOG(ERROR) << "state transfer caused error " << rc;
                         break;
                     default:
@@ -530,7 +530,7 @@ state_transfer_manager :: put_to_disk_and_send_acks(transfer_in_state* tis)
                 case datalayer::BAD_ENCODING:
                 case datalayer::CORRUPTION:
                 case datalayer::IO_ERROR:
-                case datalayer::LEVELDB_ERROR:
+                case datalayer::DB_ERROR:
                     LOG(ERROR) << "state transfer caused error " << rc;
                     break;
                 default:
@@ -550,7 +550,7 @@ state_transfer_manager :: put_to_disk_and_send_acks(transfer_in_state* tis)
                 case datalayer::BAD_ENCODING:
                 case datalayer::CORRUPTION:
                 case datalayer::IO_ERROR:
-                case datalayer::LEVELDB_ERROR:
+                case datalayer::DB_ERROR:
                     LOG(ERROR) << "state transfer caused error " << rc;
                     break;
                 default:

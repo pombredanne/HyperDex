@@ -495,7 +495,7 @@ daemon :: process_req_get(server_id from,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
         default:
             LOG(ERROR) << "GET returned unacceptable error code.";
             result = NET_SERVERERROR;

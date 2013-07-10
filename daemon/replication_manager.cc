@@ -582,7 +582,7 @@ replication_manager :: get_or_create_key_state(const region_id& ri,
             case datalayer::BAD_ENCODING:
             case datalayer::CORRUPTION:
             case datalayer::IO_ERROR:
-            case datalayer::LEVELDB_ERROR:
+            case datalayer::DB_ERROR:
             default:
                 LOG(ERROR) << "Data layer returned unexpected result when reading old value.";
                 return NULL;

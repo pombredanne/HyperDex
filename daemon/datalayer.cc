@@ -1361,7 +1361,7 @@ datalayer :: handle_error(leveldb::Status st)
     else
     {
         LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
-        return LEVELDB_ERROR;
+        return DB_ERROR;
     }
 }
 
@@ -1390,7 +1390,7 @@ hyperdex :: operator << (std::ostream& lhs, datalayer::returncode rhs)
         STRINGIFY(datalayer::BAD_ENCODING);
         STRINGIFY(datalayer::CORRUPTION);
         STRINGIFY(datalayer::IO_ERROR);
-        STRINGIFY(datalayer::LEVELDB_ERROR);
+        STRINGIFY(datalayer::DB_ERROR);
         default:
             lhs << "unknown returncode";
     }

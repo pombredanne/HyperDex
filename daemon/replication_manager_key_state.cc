@@ -182,7 +182,7 @@ replication_manager :: key_state :: initialize(datalayer* data,
         case datalayer::BAD_ENCODING:
         case datalayer::CORRUPTION:
         case datalayer::IO_ERROR:
-        case datalayer::LEVELDB_ERROR:
+        case datalayer::DB_ERROR:
         default:
             m_has_old_value = false;
             m_old_version = 0;
@@ -337,7 +337,7 @@ replication_manager :: key_state :: persist_to_datalayer(replication_manager* rm
             case datalayer::BAD_ENCODING:
             case datalayer::CORRUPTION:
             case datalayer::IO_ERROR:
-            case datalayer::LEVELDB_ERROR:
+            case datalayer::DB_ERROR:
                 return false;
             default:
                 return false;
