@@ -51,10 +51,10 @@ index_primitive :: index_changes(const region_id& ri,
                                  const e::slice& key,
                                  const e::slice* old_value,
                                  const e::slice* new_value,
-                                 leveldb::WriteBatch* updates)
+                                 DB_WBATCH* updates)
 {
     std::vector<char> scratch;
-    leveldb::Slice slice;
+    DB_SLICE slice;
 
     if (old_value && new_value && *old_value == *new_value)
     {
@@ -70,7 +70,7 @@ index_primitive :: index_changes(const region_id& ri,
     if (new_value)
     {
         index_entry(ri, attr, key_ii, key, *new_value, &scratch, &slice);
-        updates->Put(slice, leveldb::Slice());
+        updates->Put(slice, DB_SLICE());
     }
 }
 
@@ -78,7 +78,7 @@ void
 index_primitive :: index_entry(const region_id& ri,
                                uint16_t attr,
                                std::vector<char>* scratch,
-                               leveldb::Slice* slice)
+                               DB_SLICE* slice)
 {
     size_t sz = sizeof(uint8_t)
               + sizeof(uint64_t)
@@ -94,7 +94,7 @@ index_primitive :: index_entry(const region_id& ri,
     ptr = e::pack64be(ri.get(), ptr);
     ptr = e::pack16be(attr, ptr);
     assert(ptr == &scratch->front() + sz);
-    *slice = leveldb::Slice(&scratch->front(), sz);
+    *slice = DB_SLICE(&scratch->front(), sz);
 }
 
 void
@@ -102,7 +102,7 @@ index_primitive :: index_entry(const region_id& ri,
                                uint16_t attr,
                                const e::slice& value,
                                std::vector<char>* scratch,
-                               leveldb::Slice* slice)
+                               DB_SLICE* slice)
 {
     size_t val_sz = this->encoded_size(value);
     size_t sz = sizeof(uint8_t)
@@ -121,7 +121,7 @@ index_primitive :: index_entry(const region_id& ri,
     ptr = e::pack16be(attr, ptr);
     ptr = this->encode(value, ptr);
     assert(ptr == &scratch->front() + sz);
-    *slice = leveldb::Slice(&scratch->front(), sz);
+    *slice = DB_SLICE(&scratch->front(), sz);
 }
 
 void
@@ -131,7 +131,7 @@ index_primitive :: index_entry(const region_id& ri,
                                const e::slice& key,
                                const e::slice& value,
                                std::vector<char>* scratch,
-                               leveldb::Slice* slice)
+                               DB_SLICE* slice)
 {
     size_t key_sz = key_ii->encoded_size(key);
     size_t val_sz = this->encoded_size(value);
@@ -161,7 +161,7 @@ index_primitive :: index_entry(const region_id& ri,
     }
 
     assert(ptr == &scratch->front() + sz);
-    *slice = leveldb::Slice(&scratch->front(), sz);
+    *slice = DB_SLICE(&scratch->front(), sz);
 }
 
 namespace
@@ -174,13 +174,13 @@ using hyperdex::range;
 using hyperdex::region_id;
 
 e::slice
-level2e(const leveldb::Slice& s)
+level2e(const DB_SLICE& s)
 {
     return e::slice(s.data(), s.size());
 }
 
 bool
-decode_entry(const leveldb::Slice& in,
+decode_entry(const DB_SLICE& in,
              index_info* val_ii,
              index_info* key_ii,
              region_id* ri,
@@ -310,7 +310,7 @@ range_iterator :: range_iterator(leveldb_snapshot_ptr s,
     opts.snapshot = s.get();
     m_iter.reset(s, s.db()->NewIterator(opts));
 
-    leveldb::Slice slice;
+    DB_SLICE slice;
 
     if (m_range.has_start)
     {
@@ -333,7 +333,7 @@ range_iterator :: valid()
 {
     while (!m_invalid && m_iter->Valid())
     {
-        leveldb::Slice _k = m_iter->key();
+        DB_SLICE _k = m_iter->key();
         region_id ri;
         uint16_t attr;
         e::slice v;
@@ -388,7 +388,7 @@ uint64_t
 range_iterator :: cost(leveldb::DB* db)
 {
     assert(this->sorted());
-    leveldb::Slice upper;
+    DB_SLICE upper;
     m_val_ii->index_entry(m_ri, m_range.attr, m_range.end, &m_scratch, &upper);
     hyperdex::encode_bump(&m_scratch.front(), &m_scratch.front() + m_scratch.size());
     // create the range
@@ -425,7 +425,7 @@ range_iterator :: describe(std::ostream& out) const
 e::slice
 range_iterator :: internal_key()
 {
-    leveldb::Slice _k = m_iter->key();
+    DB_SLICE _k = m_iter->key();
     region_id ri;
     uint16_t attr;
     e::slice v;
@@ -444,7 +444,7 @@ void
 range_iterator :: seek(const e::slice& ik)
 {
     assert(sorted());
-    leveldb::Slice slice;
+    DB_SLICE slice;
     m_val_ii->index_entry(m_ri, m_range.attr, m_key_ii, m_range.start, ik, &m_scratch, &slice);
     m_iter->Seek(slice);
 }
@@ -500,7 +500,7 @@ key_iterator :: key_iterator(leveldb_snapshot_ptr s,
     opts.snapshot = s.get();
     m_iter.reset(s, s.db()->NewIterator(opts));
 
-    leveldb::Slice slice;
+    DB_SLICE slice;
 
     if (m_range.has_start)
     {
@@ -523,7 +523,7 @@ key_iterator :: valid()
 {
     while (!m_invalid && m_iter->Valid())
     {
-        leveldb::Slice _k = m_iter->key();
+        DB_SLICE _k = m_iter->key();
         region_id ri;
         e::slice k;
 
@@ -571,7 +571,7 @@ uint64_t
 key_iterator :: cost(leveldb::DB* db)
 {
     assert(this->sorted());
-    leveldb::Slice upper;
+    DB_SLICE upper;
     encode_key(m_ri, m_range.type, m_range.end, &m_scratch, &upper);
     hyperdex::encode_bump(&m_scratch.front(), &m_scratch.front() + m_scratch.size());
     // create the range
@@ -610,7 +610,7 @@ key_iterator :: internal_key()
 {
     region_id ri;
     e::slice k;
-    leveldb::Slice _k = m_iter->key();
+    DB_SLICE _k = m_iter->key();
     decode_key(_k, &ri, &k);
     return k;
 }
@@ -624,7 +624,7 @@ key_iterator :: sorted()
 void
 key_iterator :: seek(const e::slice& ik)
 {
-    leveldb::Slice slice;
+    DB_SLICE slice;
     encode_key(m_ri, m_range.type, ik, &m_scratch, &slice);
     m_iter->Seek(slice);
 }

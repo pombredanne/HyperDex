@@ -83,12 +83,12 @@ index_container :: index_changes(const region_id& ri,
                                  const e::slice& key,
                                  const e::slice* old_value,
                                  const e::slice* new_value,
-                                 leveldb::WriteBatch* updates)
+                                 DB_WBATCH* updates)
 {
     std::vector<e::slice> old_elems;
     std::vector<e::slice> new_elems;
     std::vector<char> scratch;
-    leveldb::Slice slice;
+    DB_SLICE slice;
 
     if (old_value)
     {

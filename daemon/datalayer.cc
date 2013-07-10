@@ -110,7 +110,7 @@ datalayer :: setup(const po6::pathname& path,
     ropts.fill_cache = true;
     ropts.verify_checksums = true;
 
-    leveldb::Slice rk("hyperdex", 8);
+    DB_SLICE rk("hyperdex", 8);
     std::string rbacking;
     st = m_db->Get(ropts, rk, &rbacking);
     bool first_time = false;
@@ -154,7 +154,7 @@ datalayer :: setup(const po6::pathname& path,
         return false;
     }
 
-    leveldb::Slice sk("state", 5);
+    DB_SLICE sk("state", 5);
     std::string sbacking;
     st = m_db->Get(ropts, sk, &sbacking);
 
@@ -236,8 +236,8 @@ datalayer :: initialize()
 {
     leveldb::WriteOptions wopts;
     wopts.sync = true;
-    leveldb::Status st = m_db->Put(wopts, leveldb::Slice("hyperdex", 8),
-                                   leveldb::Slice(PACKAGE_VERSION, strlen(PACKAGE_VERSION)));
+    leveldb::Status st = m_db->Put(wopts, DB_SLICE("hyperdex", 8),
+                                   DB_SLICE(PACKAGE_VERSION, strlen(PACKAGE_VERSION)));
 
     if (st.ok())
     {
@@ -278,8 +278,8 @@ datalayer :: save_state(const server_id& us,
     leveldb::WriteOptions wopts;
     wopts.sync = true;
     leveldb::Status st = m_db->Put(wopts,
-                                   leveldb::Slice("dirty", 5),
-                                   leveldb::Slice("", 0));
+                                   DB_SLICE("dirty", 5),
+                                   DB_SLICE("", 0));
 
     if (st.ok())
     {
@@ -317,8 +317,8 @@ datalayer :: save_state(const server_id& us,
               + pack_size(coordinator);
     std::auto_ptr<e::buffer> state(e::buffer::create(sz));
     *state << us << bind_to << coordinator;
-    st = m_db->Put(wopts, leveldb::Slice("state", 5),
-                   leveldb::Slice(reinterpret_cast<const char*>(state->data()), state->size()));
+    st = m_db->Put(wopts, DB_SLICE("state", 5),
+                   DB_SLICE(reinterpret_cast<const char*>(state->data()), state->size()));
 
     if (st.ok())
     {
@@ -357,7 +357,7 @@ datalayer :: clear_dirty()
 {
     leveldb::WriteOptions wopts;
     wopts.sync = true;
-    leveldb::Slice key("dirty", 5);
+    DB_SLICE key("dirty", 5);
     leveldb::Status st = m_db->Delete(wopts, key);
 
     if (st.ok() || st.IsNotFound())
@@ -447,7 +447,7 @@ datalayer :: get(const region_id& ri,
     std::vector<char> scratch;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
@@ -478,12 +478,12 @@ datalayer :: del(const region_id& ri,
                  const e::slice& key,
                  const std::vector<e::slice>& old_value)
 {
-    leveldb::WriteBatch updates;
+    DB_WBATCH updates;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // delete the actual object
@@ -499,8 +499,8 @@ datalayer :: del(const region_id& ri,
         char abacking[ACKED_BUF_SIZE];
         seq_id = UINT64_MAX - seq_id;
         encode_acked(ri, reg_id, seq_id, abacking);
-        leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-        leveldb::Slice aval("", 0);
+        DB_SLICE akey(abacking, ACKED_BUF_SIZE);
+        DB_SLICE aval("", 0);
         updates.Put(akey, aval);
     }
 
@@ -512,8 +512,8 @@ datalayer :: del(const region_id& ri,
         char tbacking[TRANSFER_BUF_SIZE];
         capture_id cid = m_daemon->m_config.capture_for(ri);
         assert(cid != capture_id());
-        leveldb::Slice tkey(tbacking, TRANSFER_BUF_SIZE);
-        leveldb::Slice tval;
+        DB_SLICE tkey(tbacking, TRANSFER_BUF_SIZE);
+        DB_SLICE tval;
         encode_transfer(cid, count, tbacking);
         encode_key_value(key, NULL, 0, &scratch, &tval);
         updates.Put(tkey, tval);
@@ -546,17 +546,17 @@ datalayer :: put(const region_id& ri,
                  const std::vector<e::slice>& new_value,
                  uint64_t version)
 {
-    leveldb::WriteBatch updates;
+    DB_WBATCH updates;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch1;
     std::vector<char> scratch2;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch1, &lkey);
 
     // create the encoded value
-    leveldb::Slice lval;
+    DB_SLICE lval;
     encode_value(new_value, version, &scratch2, &lval);
 
     // put the actual object
@@ -572,8 +572,8 @@ datalayer :: put(const region_id& ri,
         char abacking[ACKED_BUF_SIZE];
         seq_id = UINT64_MAX - seq_id;
         encode_acked(ri, reg_id, seq_id, abacking);
-        leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-        leveldb::Slice aval("", 0);
+        DB_SLICE akey(abacking, ACKED_BUF_SIZE);
+        DB_SLICE aval("", 0);
         updates.Put(akey, aval);
     }
 
@@ -585,8 +585,8 @@ datalayer :: put(const region_id& ri,
         char tbacking[TRANSFER_BUF_SIZE];
         capture_id cid = m_daemon->m_config.capture_for(ri);
         assert(cid != capture_id());
-        leveldb::Slice tkey(tbacking, TRANSFER_BUF_SIZE);
-        leveldb::Slice tval;
+        DB_SLICE tkey(tbacking, TRANSFER_BUF_SIZE);
+        DB_SLICE tval;
         encode_transfer(cid, count, tbacking);
         encode_key_value(key, &new_value, version, &scratch1, &tval);
         updates.Put(tkey, tval);
@@ -616,17 +616,17 @@ datalayer :: overput(const region_id& ri,
                      const std::vector<e::slice>& new_value,
                      uint64_t version)
 {
-    leveldb::WriteBatch updates;
+    DB_WBATCH updates;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch1;
     std::vector<char> scratch2;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch1, &lkey);
 
     // create the encoded value
-    leveldb::Slice lval;
+    DB_SLICE lval;
     encode_value(new_value, version, &scratch2, &lval);
 
     // put the actual object
@@ -642,8 +642,8 @@ datalayer :: overput(const region_id& ri,
         char abacking[ACKED_BUF_SIZE];
         seq_id = UINT64_MAX - seq_id;
         encode_acked(ri, reg_id, seq_id, abacking);
-        leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-        leveldb::Slice aval("", 0);
+        DB_SLICE akey(abacking, ACKED_BUF_SIZE);
+        DB_SLICE aval("", 0);
         updates.Put(akey, aval);
     }
 
@@ -655,8 +655,8 @@ datalayer :: overput(const region_id& ri,
         char tbacking[TRANSFER_BUF_SIZE];
         capture_id cid = m_daemon->m_config.capture_for(ri);
         assert(cid != capture_id());
-        leveldb::Slice tkey(tbacking, TRANSFER_BUF_SIZE);
-        leveldb::Slice tval;
+        DB_SLICE tkey(tbacking, TRANSFER_BUF_SIZE);
+        DB_SLICE tval;
         encode_transfer(cid, count, tbacking);
         encode_key_value(key, &new_value, version, &scratch1, &tval);
         updates.Put(tkey, tval);
@@ -685,7 +685,7 @@ datalayer :: uncertain_del(const region_id& ri,
     std::vector<char> scratch;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
@@ -734,7 +734,7 @@ datalayer :: uncertain_put(const region_id& ri,
     std::vector<char> scratch;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
@@ -788,7 +788,7 @@ datalayer :: get_transfer(const region_id& ri,
     char tbacking[TRANSFER_BUF_SIZE];
     capture_id cid = m_daemon->m_config.capture_for(ri);
     assert(cid != capture_id());
-    leveldb::Slice lkey(tbacking, TRANSFER_BUF_SIZE);
+    DB_SLICE lkey(tbacking, TRANSFER_BUF_SIZE);
     encode_transfer(cid, seq_no, tbacking);
     leveldb::Status st = m_db->Get(opts, lkey, &ref->m_backing);
 
@@ -819,7 +819,7 @@ datalayer :: check_acked(const region_id& ri,
     opts.verify_checksums = true;
     char abacking[ACKED_BUF_SIZE];
     encode_acked(ri, reg_id, seq_id, abacking);
-    leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
+    DB_SLICE akey(abacking, ACKED_BUF_SIZE);
     std::string val;
     leveldb::Status st = m_db->Get(opts, akey, &val);
 
@@ -861,8 +861,8 @@ datalayer :: mark_acked(const region_id& ri,
     opts.sync = false;
     char abacking[ACKED_BUF_SIZE];
     encode_acked(ri, reg_id, seq_id, abacking);
-    leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-    leveldb::Slice val("", 0);
+    DB_SLICE akey(abacking, ACKED_BUF_SIZE);
+    DB_SLICE val("", 0);
     leveldb::Status st = m_db->Put(opts, akey, val);
 
     if (st.ok())
@@ -901,7 +901,7 @@ datalayer :: max_seq_id(const region_id& reg_id,
     std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
     char abacking[ACKED_BUF_SIZE];
     encode_acked(reg_id, reg_id, 0, abacking);
-    leveldb::Slice key(abacking, ACKED_BUF_SIZE);
+    DB_SLICE key(abacking, ACKED_BUF_SIZE);
     it->Seek(key);
 
     if (!it->Valid())
@@ -937,9 +937,9 @@ datalayer :: clear_acked(const region_id& reg_id,
     std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
     char abacking[ACKED_BUF_SIZE];
     encode_acked(region_id(0), reg_id, 0, abacking);
-    it->Seek(leveldb::Slice(abacking, ACKED_BUF_SIZE));
+    it->Seek(DB_SLICE(abacking, ACKED_BUF_SIZE));
     encode_acked(region_id(0), region_id(reg_id.get() + 1), 0, abacking);
-    leveldb::Slice upper_bound(abacking, ACKED_BUF_SIZE);
+    DB_SLICE upper_bound(abacking, ACKED_BUF_SIZE);
 
     while (it->Valid() &&
            it->key().compare(upper_bound) < 0)
@@ -1167,7 +1167,7 @@ datalayer :: get_from_iterator(const region_id& ri,
     std::vector<char> scratch;
 
     // create the encoded key
-    leveldb::Slice lkey;
+    DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, iter->key(), &scratch, &lkey);
 
     // perform the read
@@ -1251,7 +1251,7 @@ datalayer :: cleaner()
         opts.verify_checksums = true;
         std::auto_ptr<leveldb::Iterator> it;
         it.reset(m_db->NewIterator(opts));
-        it->Seek(leveldb::Slice("t", 1));
+        it->Seek(DB_SLICE("t", 1));
         capture_id cached_cid;
 
         while (it->Valid())
@@ -1312,7 +1312,7 @@ datalayer :: cleaner()
             }
 
             char tbacking[TRANSFER_BUF_SIZE];
-            leveldb::Slice slice(tbacking, TRANSFER_BUF_SIZE);
+            DB_SLICE slice(tbacking, TRANSFER_BUF_SIZE);
             encode_transfer(capture_id(cid + 1), 0, tbacking);
             it->Seek(slice);
         }

@@ -81,7 +81,7 @@ class index_info
                                    const e::slice& key,
                                    const e::slice* old_value,
                                    const e::slice* new_value,
-                                   leveldb::WriteBatch* updates) = 0;
+                                   DB_WBATCH* updates) = 0;
         // return an iterator that retrieves at least the keys matching r
         // if not indexable (full scan), return NULL
         virtual datalayer::index_iterator* iterator_from_range(leveldb_snapshot_ptr snap,

@@ -35,23 +35,26 @@
 #include "common/ids.h"
 #include "daemon/datalayer.h"
 
+#define	DB_SLICE	leveldb::Slice
+#define DB_WBATCH	leveldb::WriteBatch
+
 namespace hyperdex
 {
 
 void
 encode_object_region(const region_id& ri,
                      std::vector<char>* scratch,
-                     leveldb::Slice* out);
+                     DB_SLICE* out);
 
 void
 encode_key(const region_id& ri,
            hyperdatatype key_type,
            const e::slice& key,
            std::vector<char>* scratch,
-           leveldb::Slice* out);
+           DB_SLICE* out);
 
 bool
-decode_key(const leveldb::Slice& in,
+decode_key(const DB_SLICE& in,
            region_id* ri,
            e::slice* internal_key);
 
@@ -59,7 +62,7 @@ void
 encode_value(const std::vector<e::slice>& attrs,
              uint64_t version,
              std::vector<char>* backing,
-             leveldb::Slice* out);
+             DB_SLICE* out);
 datalayer::returncode
 decode_value(const e::slice& in,
              std::vector<e::slice>* attrs,
@@ -90,7 +93,7 @@ encode_key_value(const e::slice& key,
                  const std::vector<e::slice>* value,
                  uint64_t version,
                  std::vector<char>* backing, /*XXX*/
-                 leveldb::Slice* out);
+                 DB_SLICE* out);
 datalayer::returncode
 decode_key_value(const e::slice& in,
                  bool* has_value,
@@ -105,7 +108,7 @@ create_index_changes(const schema& sc,
                      const e::slice& key,
                      const std::vector<e::slice>* old_value,
                      const std::vector<e::slice>* new_value,
-                     leveldb::WriteBatch* updates);
+                     DB_WBATCH* updates);
 
 void
 encode_bump(char* start, char* end);

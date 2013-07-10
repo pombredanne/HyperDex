@@ -54,7 +54,7 @@ class index_container : public index_info
                                    const e::slice& key,
                                    const e::slice* old_value,
                                    const e::slice* new_value,
-                                   leveldb::WriteBatch* updates);
+                                   DB_WBATCH* updates);
         virtual datalayer::index_iterator* iterator_from_check(leveldb_snapshot_ptr snap,
                                                                const region_id& ri,
                                                                const attribute_check& c,

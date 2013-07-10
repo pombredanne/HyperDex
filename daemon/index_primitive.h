@@ -47,7 +47,7 @@ class index_primitive : public index_info
                                    const e::slice& key,
                                    const e::slice* old_value,
                                    const e::slice* new_value,
-                                   leveldb::WriteBatch* updates);
+                                   DB_WBATCH* updates);
         virtual datalayer::index_iterator* iterator_from_range(leveldb_snapshot_ptr snap,
                                                                const region_id& ri,
                                                                const range& r,
@@ -57,19 +57,19 @@ class index_primitive : public index_info
         void index_entry(const region_id& ri,
                          uint16_t attr,
                          std::vector<char>* scratch,
-                         leveldb::Slice* slice);
+                         DB_SLICE* slice);
         void index_entry(const region_id& ri,
                          uint16_t attr,
                          const e::slice& value,
                          std::vector<char>* scratch,
-                         leveldb::Slice* slice);
+                         DB_SLICE* slice);
         void index_entry(const region_id& ri,
                          uint16_t attr,
                          index_info* key_ii,
                          const e::slice& key,
                          const e::slice& value,
                          std::vector<char>* scratch,
-                         leveldb::Slice* slice);
+                         DB_SLICE* slice);
 };
 
 } // namespace hyperdex

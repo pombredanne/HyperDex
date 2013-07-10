@@ -139,7 +139,7 @@ datalayer :: region_iterator :: region_iterator(leveldb_iterator_ptr iter,
     char* ptr = buf;
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
-    m_iter->Seek(leveldb::Slice(buf, sizeof(uint8_t) + sizeof(uint64_t)));
+    m_iter->Seek(DB_SLICE(buf, sizeof(uint8_t) + sizeof(uint64_t)));
 }
 
 datalayer :: region_iterator :: ~region_iterator() throw ()
@@ -160,7 +160,7 @@ datalayer :: region_iterator :: valid()
         return false;
     }
 
-    leveldb::Slice k = m_iter->key();
+    DB_SLICE k = m_iter->key();
 
     if (k.size() < sizeof(uint8_t) + sizeof(uint64_t))
     {
@@ -196,8 +196,8 @@ datalayer :: region_iterator :: cost(leveldb::DB* db)
     encode_bump(buf + sz, buf + 2 * sz);
     // create the range
     leveldb::Range r;
-    r.start = leveldb::Slice(buf, sz);
-    r.limit = leveldb::Slice(buf + sz, sz);
+    r.start = DB_SLICE(buf, sz);
+    r.limit = DB_SLICE(buf + sz, sz);
     // ask leveldb for the size of the range
     uint64_t ret;
     db->GetApproximateSizes(&r, 1, &ret);
@@ -208,7 +208,7 @@ e::slice
 datalayer :: region_iterator :: key()
 {
     const size_t sz = sizeof(uint8_t) + sizeof(uint64_t);
-    leveldb::Slice _k = m_iter->key();
+    DB_SLICE _k = m_iter->key();
     e::slice k = e::slice(_k.data() + sz, _k.size() - sz);
     size_t decoded_sz = m_di->decoded_size(k);
 
@@ -417,7 +417,7 @@ datalayer :: search_iterator :: valid()
         opts.fill_cache = true;
         opts.verify_checksums = true;
         std::vector<char> kbacking;
-        leveldb::Slice lkey;
+        DB_SLICE lkey;
         encode_key(m_ri, sc.attrs[0].type, m_iter->key(), &kbacking, &lkey);
 
         leveldb::Status st = m_dl->m_db->Get(opts, lkey, &ref.m_backing);

@@ -40,7 +40,7 @@ using hyperdex::datalayer;
 void
 hyperdex :: encode_object_region(const region_id& ri,
                                  std::vector<char>* scratch,
-                                 leveldb::Slice* out)
+                                 DB_SLICE* out)
 {
     size_t sz = sizeof(uint8_t) + sizeof(uint64_t);
 
@@ -50,7 +50,7 @@ hyperdex :: encode_object_region(const region_id& ri,
     }
 
     char* ptr = &scratch->front();
-    *out = leveldb::Slice(ptr, sz);
+    *out = DB_SLICE(ptr, sz);
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
 }
@@ -60,7 +60,7 @@ hyperdex :: encode_key(const region_id& ri,
                        hyperdatatype key_type,
                        const e::slice& key,
                        std::vector<char>* scratch,
-                       leveldb::Slice* out)
+                       DB_SLICE* out)
 {
     index_info* ii(index_info::lookup(key_type));
     size_t sz = sizeof(uint8_t) + sizeof(uint64_t) + ii->encoded_size(key);
@@ -71,14 +71,14 @@ hyperdex :: encode_key(const region_id& ri,
     }
 
     char* ptr = &scratch->front();
-    *out = leveldb::Slice(ptr, sz);
+    *out = DB_SLICE(ptr, sz);
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
     ii->encode(key, ptr);
 }
 
 bool
-hyperdex :: decode_key(const leveldb::Slice& in,
+hyperdex :: decode_key(const DB_SLICE& in,
                        region_id* ri,
                        e::slice* internal_key)
 {
@@ -101,7 +101,7 @@ void
 hyperdex :: encode_value(const std::vector<e::slice>& attrs,
                          uint64_t version,
                          std::vector<char>* backing,
-                         leveldb::Slice* out)
+                         DB_SLICE* out)
 {
     assert(attrs.size() < 65536);
     size_t sz = sizeof(uint64_t) + sizeof(uint16_t);
@@ -123,7 +123,7 @@ hyperdex :: encode_value(const std::vector<e::slice>& attrs,
         ptr += attrs[i].size();
     }
 
-    *out = leveldb::Slice(&backing->front(), sz);
+    *out = DB_SLICE(&backing->front(), sz);
 }
 
 datalayer::returncode
@@ -231,7 +231,7 @@ hyperdex :: encode_key_value(const e::slice& key,
                              const std::vector<e::slice>* value,
                              uint64_t version,
                              std::vector<char>* backing, /*XXX*/
-                             leveldb::Slice* out)
+                             DB_SLICE* out)
 {
     size_t sz = sizeof(uint32_t) + key.size() + sizeof(uint64_t) + sizeof(uint16_t);
 
@@ -242,7 +242,7 @@ hyperdex :: encode_key_value(const e::slice& key,
 
     backing->resize(sz);
     char* ptr = &backing->front();
-    *out = leveldb::Slice(ptr, sz);
+    *out = DB_SLICE(ptr, sz);
     ptr = e::pack32be(key.size(), ptr);
     memmove(ptr, key.data(), key.size());
     ptr += key.size();
@@ -354,7 +354,7 @@ hyperdex :: create_index_changes(const schema& sc,
                                  const e::slice& key,
                                  const std::vector<e::slice>* old_value,
                                  const std::vector<e::slice>* new_value,
-                                 leveldb::WriteBatch* updates)
+                                 DB_WBATCH* updates)
 {
     assert(!old_value || !new_value || old_value->size() == new_value->size());
     assert(!old_value || old_value->size() + 1 == sc.attrs_sz);
