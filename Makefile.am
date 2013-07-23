@@ -26,7 +26,7 @@
 ## POSSIBILITY OF SUCH DAMAGE.
 
 ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
-AM_CXXFLAGS = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(WANAL_CXXFLAGS)
+AM_CXXFLAGS = -fvisibility=hidden -fvisibility-inlines-hidden $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(WANAL_CXXFLAGS)
 AM_MAKEFLAGS = --no-print-directory
 AM_YFLAGS = -d
 
@@ -45,7 +45,7 @@ EXTRA_DIST += wscript
 EXTRA_DIST += windows/hyperclientclr.cpp
 EXTRA_DIST += windows/marshal.cpp
 
-lib_LTLIBRARIES = libhyperclient.la
+lib_LTLIBRARIES = libhyperclient.la libhyperdex-admin.la
 
 pyexec_LTLIBRARIES =
 
@@ -72,6 +72,7 @@ hyperdexexec_PROGRAMS += hyperdex-rm-space
 hyperdexexec_PROGRAMS += hyperdex-show-config
 hyperdexexec_PROGRAMS += hyperdex-async-benchmark
 hyperdexexec_PROGRAMS += hyperdex-benchmark
+hyperdexexec_PROGRAMS += hyperdex-perf-counters
 hyperdexexec_PROGRAMS += hyperdex-initiate-transfer
 hyperdexexec_LTLIBRARIES = libhypercoordinator.la
 
@@ -170,7 +171,7 @@ noinst_HEADERS += client/pending_aggregation.h
 noinst_HEADERS += client/pending_atomic.h
 noinst_HEADERS += client/util.h
 noinst_HEADERS += osx/ieee754.h
-noinst_HEADERS += tools/common.h
+noinst_HEADERS += tools/old.common.h
 noinst_HEADERS += windows/hyperclientclr.h
 noinst_HEADERS += windows/ieee754.h
 noinst_HEADERS += windows/marshal.h
@@ -449,6 +450,57 @@ client_cc_testcompile_CPPFLAGS = -I${abs_top_srcdir}/client $(CPPFLAGS)
 client_cc_testcompile_LDADD = libhyperclient.la
 
 ################################################################################
+################################# Admin Library ################################
+################################################################################
+
+libhyperdex_admin_la_SOURCES =
+libhyperdex_admin_la_SOURCES += common/attribute.cc
+libhyperdex_admin_la_SOURCES += common/capture.cc
+libhyperdex_admin_la_SOURCES += common/configuration.cc
+libhyperdex_admin_la_SOURCES += common/coordinator_link.cc
+libhyperdex_admin_la_SOURCES += common/datatype_float.cc
+libhyperdex_admin_la_SOURCES += common/datatype_int64.cc
+libhyperdex_admin_la_SOURCES += common/datatype_list.cc
+libhyperdex_admin_la_SOURCES += common/datatype_map.cc
+libhyperdex_admin_la_SOURCES += common/datatypes.cc
+libhyperdex_admin_la_SOURCES += common/datatype_set.cc
+libhyperdex_admin_la_SOURCES += common/datatype_string.cc
+libhyperdex_admin_la_SOURCES += common/hash.cc
+libhyperdex_admin_la_SOURCES += common/hyperdex.cc
+libhyperdex_admin_la_SOURCES += common/hyperspace.cc
+libhyperdex_admin_la_SOURCES += common/mapper.cc
+libhyperdex_admin_la_SOURCES += common/ordered_encoding.cc
+libhyperdex_admin_la_SOURCES += common/range.cc
+libhyperdex_admin_la_SOURCES += common/range_searches.cc
+libhyperdex_admin_la_SOURCES += common/regex_match.cc
+libhyperdex_admin_la_SOURCES += common/schema.cc
+libhyperdex_admin_la_SOURCES += common/serialization.cc
+libhyperdex_admin_la_SOURCES += common/transfer.cc
+libhyperdex_admin_la_SOURCES += admin/admin.cc
+libhyperdex_admin_la_SOURCES += admin/c.cc
+libhyperdex_admin_la_SOURCES += admin/pending.cc
+libhyperdex_admin_la_SOURCES += admin/pending_perf_counters.cc
+libhyperdex_admin_la_SOURCES += admin/pending_string.cc
+libhyperdex_admin_la_CPPFLAGS = -I${abs_top_srcdir}/include
+libhyperdex_admin_la_LIBADD =
+libhyperdex_admin_la_LIBADD += $(E_LIBS)
+libhyperdex_admin_la_LIBADD += $(BUSYBEE_LIBS)
+libhyperdex_admin_la_LIBADD += $(REPLICANT_LIBS)
+libhyperdex_admin_la_LIBADD += -lcityhash
+
+if ENABLE_PYTHON_BINDINGS
+pyexec_LTLIBRARIES += admin/python/hyperadmin.la
+endif
+
+admin/python/hyperadmin.c: admin/python/hyperadmin.pyx
+	$(pyx_verbose)cython admin/python/hyperadmin.pyx
+
+admin_python_hyperadmin_la_SOURCES = admin/python/hyperadmin.c
+admin_python_hyperadmin_la_CPPFLAGS = $(PYTHON_CPPFLAGS) $(CPPFLAGS)
+admin_python_hyperadmin_la_LIBADD = libhyperdex-admin.la $(PYTHON_LDFLAGS)
+admin_python_hyperadmin_la_LDFLAGS = -module -avoid-version -export-symbols-regex inithyperadmin
+
+################################################################################
 ##################################### Tests ####################################
 ################################################################################
 
@@ -500,6 +552,9 @@ hyperdex_benchmark_LDADD = libhyperclient.la -lhyperleveldb $(E_LIBS) -lpopt
 hyperdex_initiate_transfer_SOURCES = tools/initiate-transfer.cc
 hyperdex_initiate_transfer_CPPFLAGS = -I${abs_top_srcdir}/client $(CPPFLAGS)
 hyperdex_initiate_transfer_LDADD = libhyperclient.la -lpopt
+
+hyperdex_perf_counters_SOURCES = tools/perf-counters.cc
+hyperdex_perf_counters_LDADD = libhyperdex-admin.la -lpopt
 
 ################################################################################
 ################################## Benchmarks ##################################
@@ -576,11 +631,13 @@ help2man_verbose_0 = @echo "  MAN   " $@;
 
 EXTRA_DIST += man/hyperdex.1.md man/hyperdex.1.h2m
 dist_man_MANS = man/hyperdex.1
+HELP2MAN_FLAGS = --libtool --no-info --version-string=$(VERSION) --manual="HyperDex User Manual"
 
 %.h2m: %.md
 	$(pandoc_verbose)pandoc -s -w man -o $@ $<
+	$(sed_verbose)sed -i -e 'N;s/^\.SH \(.*\)\n.PP$$/[\1]/' $@
 	$(sed_verbose)sed -i -e 's/^\.SH \(.*\)$$/[\1]/' $@
 
 man/hyperdex.1: man/hyperdex.1.h2m hyperdex.cc $(top_srcdir)/configure.ac
 	@$(MAKE) --no-print-directory $(AM_MAKEFLAGS) hyperdex$(EXEEXT)
-	$(help2man_verbose)help2man --libtool --no-info --section 1 --output $@ --version-string=$(VERSION) --include man/hyperdex.1.h2m ./hyperdex$(EXEEXT)
+	$(help2man_verbose)help2man $(HELP2MAN_FLAGS) --section 1 --output $@ --include man/hyperdex.1.h2m ${abs_top_builddir}/hyperdex$(EXEEXT)

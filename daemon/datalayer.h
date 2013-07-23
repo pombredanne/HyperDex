@@ -48,6 +48,7 @@
 #include <po6/threads/thread.h>
 
 // HyperDex
+#include "namespace.h"
 #include "common/attribute_check.h"
 #include "common/configuration.h"
 #include "common/counter_map.h"
@@ -57,9 +58,7 @@
 //#include "daemon/leveldb.h"
 #include "daemon/reconfigure_returncode.h"
 
-namespace hyperdex
-{
-// Forward declarations
+BEGIN_HYPERDEX_NAMESPACE
 class daemon;
 
 class datalayer
@@ -112,6 +111,10 @@ class datalayer
         void reconfigure(const configuration& old_config,
                          const configuration& new_config,
                          const server_id& us);
+        // stats
+        bool get_property(const e::slice& property,
+                          std::string* value);
+        uint64_t approximate_size();
 
     public:
         // retrieve the current value of a key
@@ -232,6 +235,6 @@ class datalayer::reference
 std::ostream&
 operator << (std::ostream& lhs, datalayer::returncode rhs);
 
-} // namespace hyperdex
+END_HYPERDEX_NAMESPACE
 
 #endif // hyperdex_daemon_datalayer_h_

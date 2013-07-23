@@ -1,4 +1,5 @@
 aclocal.m4
+/admin/python/hyperadmin.c
 autom4te.cache/
 binary-test
 client/cc/testcompile
@@ -29,7 +30,7 @@ doc/man/hyperdex-daemon.1
 doc/man/hyperdex-replication-stress-test.1
 doc/man/hyperdex-simple-consistency-stress-test.1
 hyperclient.pc
-hyperdex
+/hyperdex
 hyperdex-add-space
 hyperdex-async-benchmark
 hyperdex-benchmark
@@ -39,6 +40,7 @@ hyperdex-daemon
 hyperdex-initialize-cluster
 hyperdex-initiate-transfer
 hyperdex-kill
+/hyperdex-perf-counters
 hyperdex-replication-stress-test
 hyperdex-rm-space
 hyperdex-search-stress-test

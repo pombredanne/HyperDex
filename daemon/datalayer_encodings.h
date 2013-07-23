@@ -32,14 +32,14 @@
 #include <hyperleveldb/slice.h>
 
 // HyperDex
+#include "namespace.h"
 #include "common/ids.h"
 #include "daemon/datalayer.h"
 
 #define	DB_SLICE	leveldb::Slice
 #define DB_WBATCH	leveldb::WriteBatch
 
-namespace hyperdex
-{
+BEGIN_HYPERDEX_NAMESPACE
 
 void
 encode_object_region(const region_id& ri,
@@ -113,6 +113,6 @@ create_index_changes(const schema& sc,
 void
 encode_bump(char* start, char* end);
 
-}
+END_HYPERDEX_NAMESPACE
 
 #endif // hyperdex_daemon_datalayer_encodings_h_

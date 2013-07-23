@@ -35,6 +35,7 @@
 #include <busybee_utils.h>
 
 // HyperDex
+#include "visibility.h"
 #include "common/attribute_check.h"
 #include "common/datatypes.h"
 #include "common/funcall.h"
@@ -450,8 +451,8 @@ client :: loop(int timeout, hyperclient_returncode* status)
             continue;
         }
 
-        if (vfrom == it->second.vsi &&
-            id == it->second.si &&
+        if (vfrom == psp.vsi &&
+            id == psp.si &&
             m_config.get_server_id(vfrom) == id)
         {
             if (!op->handle_message(this, id, vfrom, msg_type, msg, up, status))
@@ -830,7 +831,7 @@ client :: handle_disruption(const server_id& si)
     m_busybee.drop(si.get());
 }
 
-std::ostream&
+HYPERDEX_API std::ostream&
 operator << (std::ostream& lhs, hyperclient_returncode rhs)
 {
     switch (rhs)

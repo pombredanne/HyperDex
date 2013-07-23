@@ -39,6 +39,7 @@
 #include <e/slice.h>
 
 // HyperDex
+#include "namespace.h"
 #include "common/attribute.h"
 #include "common/attribute_check.h"
 #include "common/capture.h"
@@ -47,8 +48,7 @@
 #include "common/schema.h"
 #include "common/transfer.h"
 
-namespace hyperdex
-{
+BEGIN_HYPERDEX_NAMESPACE
 
 class configuration
 {
@@ -64,7 +64,7 @@ class configuration
 
     // membership metadata
     public:
-        void get_all_addresses(std::vector<std::pair<server_id, po6::net::location> >* addrs);
+        void get_all_addresses(std::vector<std::pair<server_id, po6::net::location> >* addrs) const;
         po6::net::location get_address(const server_id& id) const;
         region_id get_region_id(const virtual_server_id& id) const;
         server_id get_server_id(const virtual_server_id& id) const;
@@ -117,7 +117,7 @@ class configuration
                            std::vector<virtual_server_id>* servers) const;
 
     public:
-        void debug_dump(std::ostream& out);
+        void dump(std::ostream& out) const;
 
     public:
         configuration& operator = (const configuration& rhs);
@@ -161,6 +161,6 @@ operator >> (e::unpacker, configuration& c);
 size_t
 pack_size(const configuration&);
 
-} // namespace hyperdex
+END_HYPERDEX_NAMESPACE
 
 #endif // hyperdex_common_configuration_h_
