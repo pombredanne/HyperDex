@@ -58,6 +58,34 @@
 //#include "daemon/leveldb.h"
 #include "daemon/reconfigure_returncode.h"
 
+#if 0
+#define	SNAPSHOT_PTR	leveldb_snapshot_ptr
+#define	DB_PTR	leveldb::DB*
+#define ITER_PTR	leveldb_iterator_ptr
+#define	DB_SLICE	leveldb::Slice
+#define DB_WBATCH	leveldb::WriteBatch
+#else
+#define SNAPSHOT_PTR	MDB_txn*
+#define DB_PTR	MDB_env*
+#define ITER_PTR	MDB_cursor*
+#define	DB_SLICE	e::slice
+#define DB_WBATCH	MDB_txn*
+#endif
+
+#define STRLENOF(s)	(sizeof(s)-1)
+
+/* Assign a string constant to an MDB_val */
+#define	MVS(v,s)	v.mv_data = (void *)s; v.mv_size = STRLENOF(s)
+
+/* data and size of a string constant */
+#define MVAL(s)		s, STRLENOF(s)
+
+/* Assign a slice to an MDB_val */
+#define MVSL(v,sl)	v.mv_data = (void *)sl.data(); v.mv_size = sl.size()
+
+/* Assign a buffer to an MDB_val */
+#define MVBF(v,bf)	v.mv_data = bf; v.mv_size = sizeof(bf)
+
 BEGIN_HYPERDEX_NAMESPACE
 class daemon;
 
@@ -82,7 +110,7 @@ class datalayer
         class sorted_iterator;
         class unsorted_iterator;
         class intersect_iterator;
-        typedef leveldb_snapshot_ptr snapshot;
+        typedef SNAPSHOT_PTR snapshot;
 
     public:
         datalayer(daemon*);
@@ -199,11 +227,12 @@ class datalayer
     private:
         void cleaner();
         void shutdown();
-        returncode handle_error(leveldb::Status st);
+        returncode handle_error(int rc);
 
     private:
         daemon* m_daemon;
-        leveldb_db_ptr m_db;
+        MDB_env *m_db;
+		MDB_dbi m_dbi;
         counter_map m_counters;
         po6::threads::thread m_cleaner;
         po6::threads::mutex m_block_cleaner;
@@ -230,6 +259,7 @@ class datalayer::reference
 
     private:
         std::string m_backing;
+		MDB_txn *m_rtxn;
 };
 
 std::ostream&

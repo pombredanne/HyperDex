@@ -36,7 +36,7 @@
 #include "daemon/datalayer_iterator.h"
 
 using hyperdex::datalayer;
-using hyperdex::leveldb_snapshot_ptr;
+//using hyperdex::leveldb_snapshot_ptr;
 
 namespace
 {
@@ -68,13 +68,13 @@ internal_key_compare(const e::slice& lhs, const e::slice& rhs)
 
 //////////////////////////////// class iterator ////////////////////////////////
 
-datalayer :: iterator :: iterator(leveldb_snapshot_ptr s)
+datalayer :: iterator :: iterator(SNAPSHOT_PTR s)
     : m_ref(0)
     , m_snap(s)
 {
 }
 
-leveldb_snapshot_ptr
+SNAPSHOT_PTR
 datalayer :: iterator :: snap()
 {
     return m_snap;
@@ -87,7 +87,7 @@ datalayer :: iterator :: ~iterator() throw ()
 ///////////////////////////// class dummy_iterator /////////////////////////////
 
 datalayer :: dummy_iterator :: dummy_iterator()
-    : iterator(leveldb_snapshot_ptr())
+    : iterator(NULL)
 {
 }
 
@@ -103,7 +103,7 @@ datalayer :: dummy_iterator :: next()
 }
 
 uint64_t
-datalayer :: dummy_iterator :: cost(leveldb::DB*)
+datalayer :: dummy_iterator :: cost(DB_PTR)
 {
     return 0;
 }
@@ -126,10 +126,10 @@ datalayer :: dummy_iterator :: ~dummy_iterator() throw ()
 
 ///////////////////////////// class region_iterator ////////////////////////////
 
-datalayer :: region_iterator :: region_iterator(leveldb_iterator_ptr iter,
+datalayer :: region_iterator :: region_iterator(ITER_PTR iter,
                                                 const region_id& ri,
                                                 index_info* di)
-    : iterator(iter.snap())
+    : iterator(mdb_cursor_txn(iter))
     , m_iter(iter)
     , m_ri(ri)
     , m_decoded()
@@ -137,13 +137,16 @@ datalayer :: region_iterator :: region_iterator(leveldb_iterator_ptr iter,
 {
     char buf[sizeof(uint8_t) + sizeof(uint64_t)];
     char* ptr = buf;
+	MDB_val k = {sizeof(buf), buf};
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
-    m_iter->Seek(DB_SLICE(buf, sizeof(uint8_t) + sizeof(uint64_t)));
+	mdb_cursor_get(iter, &k, NULL, MDB_SET_RANGE);
 }
 
 datalayer :: region_iterator :: ~region_iterator() throw ()
 {
+	MDB_txn *txn = mdb_cursor_txn(m_iter);
+	mdb_cursor_close(m_iter);
 }
 
 std::ostream&
@@ -155,36 +158,38 @@ datalayer :: region_iterator :: describe(std::ostream& out) const
 bool
 datalayer :: region_iterator :: valid()
 {
-    if (!m_iter->Valid())
+	MDB_val k;
+	int rc;
+	
+	rc = mdb_cursor_get(m_iter, &k, NULL, MDB_GET_CURRENT);
+	if (rc)
     {
         return false;
     }
 
-    DB_SLICE k = m_iter->key();
-
-    if (k.size() < sizeof(uint8_t) + sizeof(uint64_t))
+    if (k.mv_size < sizeof(uint8_t) + sizeof(uint64_t))
     {
         return false;
     }
 
-    if (*k.data() != 'o')
+    if (*(const char *)k.mv_data != 'o')
     {
         return false;
     }
 
     uint64_t ri;
-    e::unpack64be(k.data() + sizeof(uint8_t), &ri);
+    e::unpack64be((const char *)k.mv_data + sizeof(uint8_t), &ri);
     return region_id(ri) == m_ri;
 }
 
 void
 datalayer :: region_iterator :: next()
 {
-    m_iter->Next();
+	mdb_cursor_get(m_iter, NULL, NULL, MDB_NEXT);
 }
 
 uint64_t
-datalayer :: region_iterator :: cost(leveldb::DB* db)
+datalayer :: region_iterator :: cost(DB_PTR db)
 {
     const size_t sz = sizeof(uint8_t) + sizeof(uint64_t);
     char buf[2 * sz];
@@ -223,7 +228,7 @@ datalayer :: region_iterator :: key()
 
 ///////////////////////////// class index_iterator /////////////////////////////
 
-datalayer :: index_iterator :: index_iterator(leveldb_snapshot_ptr s)
+datalayer :: index_iterator :: index_iterator(SNAPSHOT_PTR s)
     : iterator(s)
 {
 }
@@ -234,7 +239,7 @@ datalayer :: index_iterator :: ~index_iterator() throw ()
 
 //////////////////////////// class intersect_iterator ////////////////////////////
 
-datalayer :: intersect_iterator :: intersect_iterator(leveldb_snapshot_ptr s,
+datalayer :: intersect_iterator :: intersect_iterator(SNAPSHOT_PTR s,
                                                       const std::vector<e::intrusive_ptr<index_iterator> >& iterators)
     : index_iterator(s)
     , m_iters(iterators)
@@ -319,7 +324,7 @@ datalayer :: intersect_iterator :: next()
 }
 
 uint64_t
-datalayer :: intersect_iterator :: cost(leveldb::DB*)
+datalayer :: intersect_iterator :: cost(DB_PTR)
 {
     return m_cost;
 }
@@ -462,7 +467,7 @@ datalayer :: search_iterator :: next()
 }
 
 uint64_t
-datalayer :: search_iterator :: cost(leveldb::DB* db)
+datalayer :: search_iterator :: cost(DB_PTR db)
 {
     return m_iter->cost(db);
 }

@@ -29,15 +29,12 @@
 #define hyperdex_daemon_datalayer_encodings_h_
 
 // LevelDB
-#include <hyperleveldb/slice.h>
+//#include <hyperleveldb/slice.h>
 
 // HyperDex
 #include "namespace.h"
 #include "common/ids.h"
 #include "daemon/datalayer.h"
-
-#define	DB_SLICE	leveldb::Slice
-#define DB_WBATCH	leveldb::WriteBatch
 
 BEGIN_HYPERDEX_NAMESPACE
 
@@ -108,7 +105,7 @@ create_index_changes(const schema& sc,
                      const e::slice& key,
                      const std::vector<e::slice>* old_value,
                      const std::vector<e::slice>* new_value,
-                     DB_WBATCH* updates);
+                     DB_WBATCH updates);
 
 void
 encode_bump(char* start, char* end);

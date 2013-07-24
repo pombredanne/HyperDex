@@ -48,7 +48,7 @@ class index_primitive : public index_info
                                    const e::slice* old_value,
                                    const e::slice* new_value,
                                    DB_WBATCH* updates);
-        virtual datalayer::index_iterator* iterator_from_range(leveldb_snapshot_ptr snap,
+        virtual datalayer::index_iterator* iterator_from_range(SNAPSHOT_PTR snap,
                                                                const region_id& ri,
                                                                const range& r,
                                                                index_info* key_ii);

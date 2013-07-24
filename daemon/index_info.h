@@ -29,7 +29,7 @@
 #define hyperdex_daemon_index_info_h_
 
 // LevelDB
-#include <hyperleveldb/write_batch.h>
+//#include <hyperleveldb/write_batch.h>
 
 // e
 #include <e/slice.h>
@@ -81,16 +81,16 @@ class index_info
                                    const e::slice& key,
                                    const e::slice* old_value,
                                    const e::slice* new_value,
-                                   DB_WBATCH* updates) = 0;
+                                   DB_WBATCH updates) = 0;
         // return an iterator that retrieves at least the keys matching r
         // if not indexable (full scan), return NULL
-        virtual datalayer::index_iterator* iterator_from_range(leveldb_snapshot_ptr snap,
+        virtual datalayer::index_iterator* iterator_from_range(SNAPSHOT_PTR snap,
                                                                const region_id& ri,
                                                                const range& r,
                                                                index_info* key_ii);
         // return an iterator that retrieves at least the keys that pass c
         // if not indexable (full scan), return NULL
-        virtual datalayer::index_iterator* iterator_from_check(leveldb_snapshot_ptr snap,
+        virtual datalayer::index_iterator* iterator_from_check(SNAPSHOT_PTR snap,
                                                                const region_id& ri,
                                                                const attribute_check& c,
                                                                index_info* key_ii);

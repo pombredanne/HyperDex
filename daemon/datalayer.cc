@@ -91,110 +91,98 @@ datalayer :: setup(const po6::pathname& path,
 				   unsigned maxsize)
 {
 	size_t msize = (size_t)maxsize * 1024ULL * 1024ULL;
-    leveldb::Options opts;
-    opts.write_buffer_size = 64ULL * 1024ULL * 1024ULL;
-    opts.create_if_missing = true;
-    opts.filter_policy = leveldb::NewBloomFilterPolicy(10);
-    std::string name(path.get());
-    leveldb::DB* tmp_db;
-    leveldb::Status st = leveldb::DB::Open(opts, name, &tmp_db);
+	MDB_txn *txn;
+	MDB_val key, val;
+	int rc;
+	bool ret = false;
 
-    if (!st.ok())
-    {
-        LOG(ERROR) << "could not open LevelDB: " << st.ToString();
+	rc = mdb_env_create(&m_db);
+	if (rc)
+	{
+        LOG(ERROR) << "could not create LMDB env: " << mdb_strerror(rc);
         return false;
-    }
+	}
+	rc = mdb_env_set_mapsize(m_db, msize);
+	rc = mdb_env_open(m_db, path.get(), MDB_WRITEMAP|MDB_NOMETASYNC, 0600);
+	if (rc)
+	{
+        LOG(ERROR) << "could not open LMDB env: " << mdb_strerror(rc);
+        return false;
+	}
+	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	if (rc)
+	{
+        LOG(ERROR) << "could not open LMDB txn: " << mdb_strerror(rc);
+        return false;
+	}
+	rc = mdb_dbi_open(txn, NULL, 0, &m_dbi);
+	if (rc)
+	{
+        LOG(ERROR) << "could not open LMDB dbi: " << mdb_strerror(rc);
+		mdb_txn_abort(txn);
+        return false;
+	}
 
-    m_db.reset(tmp_db);
-    leveldb::ReadOptions ropts;
-    ropts.fill_cache = true;
-    ropts.verify_checksums = true;
-
-    DB_SLICE rk("hyperdex", 8);
-    std::string rbacking;
-    st = m_db->Get(ropts, rk, &rbacking);
+	// read the "hyperdex" key and check the version
     bool first_time = false;
 
-    if (st.ok())
+	MVS(key, "hyperdex");
+	rc = mdb_get(txn, m_dbi, &key, &val);
+
+    if (rc == MDB_SUCCESS)
     {
         first_time = false;
 
-        if (rbacking != PACKAGE_VERSION &&
-            rbacking != "1.0.rc1" &&
-            rbacking != "1.0.rc2")
+		if (memcmp(val.mv_data, MVAL(PACKAGE_VERSION)) &&
+			memcmp(val.mv_data, MVAL("1.0.rc1")) &&
+			memcmp(val.mv_data, MVAL("1.0.rc2")))
         {
-            LOG(ERROR) << "could not restore from LevelDB because "
+            LOG(ERROR) << "could not restore from DB because "
                        << "the existing data was created by "
-                       << "HyperDex " << rbacking << " but "
+                       << "HyperDex " << val.mv_data << " but "
                        << "this is version " << PACKAGE_VERSION;
-            return false;
+            goto leave;
         }
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         first_time = true;
     }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
-    }
     else
     {
-        LOG(ERROR) << "could not restore from LevelDB because it returned an "
+        LOG(ERROR) << "could not restore from DB because it returned an "
                    << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
-        return false;
+                   << mdb_strerror(rc);
+        goto leave;
     }
 
-    DB_SLICE sk("state", 5);
-    std::string sbacking;
-    st = m_db->Get(ropts, sk, &sbacking);
-
-    if (st.ok())
+	MVS(key, "state");
+	rc = mdb_get(txn, m_dbi, &key, &val);
+    if (rc == MDB_SUCCESS)
     {
         if (first_time)
         {
-            LOG(ERROR) << "could not restore from LevelDB because a previous "
+            LOG(ERROR) << "could not restore from DB because a previous "
                        << "execution crashed and the database was tampered with; "
                        << "you're on your own with this one";
-            return false;
+            goto leave;
         }
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         if (!first_time)
         {
-            LOG(ERROR) << "could not restore from LevelDB because a previous "
+            LOG(ERROR) << "could not restore from DB because a previous "
                        << "execution crashed; run the recovery program and try again";
-            return false;
+            goto leave;
         }
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
     }
     else
     {
-        LOG(ERROR) << "could not restore from LevelDB because it returned an "
+        LOG(ERROR) << "could not restore from DB because it returned an "
                    << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
-        return false;
+                   << mdb_strerror(rc);
+        goto leave;
     }
 
     {
@@ -206,23 +194,29 @@ datalayer :: setup(const po6::pathname& path,
     if (first_time)
     {
         *saved = false;
-        return true;
+		ret = true;
+		goto leave;
     }
 
+	{
     uint64_t us;
     *saved = true;
-    e::unpacker up(sbacking.data(), sbacking.size());
+    e::unpacker up((const char *)val.mv_data, val.mv_size);
     up = up >> us >> *saved_bind_to >> *saved_coordinator;
     *saved_us = server_id(us);
 
     if (up.error())
     {
-        LOG(ERROR) << "could not restore from LevelDB because a previous "
+        LOG(ERROR) << "could not restore from DB because a previous "
                    << "execution saved invalid state; run the recovery program and try again";
-        return false;
+        goto leave;
     }
+	}
+	ret = true;
 
-    return true;
+leave:
+	mdb_txn_commit(txn);
+    return ret;
 }
 
 void
@@ -234,40 +228,31 @@ datalayer :: teardown()
 bool
 datalayer :: initialize()
 {
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
-    leveldb::Status st = m_db->Put(wopts, DB_SLICE("hyperdex", 8),
-                                   DB_SLICE(PACKAGE_VERSION, strlen(PACKAGE_VERSION)));
+	MDB_txn *txn;
+	MDB_val key, val;
+	int rc;
 
-    if (st.ok())
-    {
-        return true;
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "could not initialize LevelDB because Put returned NotFound:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not initialize LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not initialize LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "could not initialize LevelDB because it returned an "
-                   << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
-        return false;
-    }
+	MVS(key, "hyperdex");
+	MVS(val, PACKAGE_VERSION);
+
+	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	if (rc)
+	{
+		LOG(ERROR) << "could not open txn: " << mdb_strerror(rc);
+		return false;
+	}
+	rc = mdb_put(txn, m_dbi, &key, &val, 0);
+	if (rc == MDB_SUCCESS) {
+		rc = mdb_txn_commit(txn);
+		if (rc == MDB_SUCCESS)
+			return true;
+		txn = NULL;
+	}
+
+    LOG(ERROR) << "could not initialize DB: " << mdb_strerror(rc);
+	if (txn)
+		mdb_txn_abort(txn);
+    return false;
 }
 
 bool
@@ -275,40 +260,24 @@ datalayer :: save_state(const server_id& us,
                         const po6::net::location& bind_to,
                         const po6::net::hostname& coordinator)
 {
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
-    leveldb::Status st = m_db->Put(wopts,
-                                   DB_SLICE("dirty", 5),
-                                   DB_SLICE("", 0));
+	MDB_txn *txn;
+	MDB_val key, val;
+	int rc;
 
-    if (st.ok())
+	MVS(key, "dirty");
+	MVS(val, "");
+
+	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	if (rc)
+	{
+		LOG(ERROR) << "could not open txn: " << mdb_strerror(rc);
+		return false;
+	}
+	rc = mdb_put(txn, m_dbi, &key, &val, 0);
+	if (rc)
     {
-        // Yay
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "could not set dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: "
-                   << "could not set dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: "
-                   << "could not set dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't "
-                   << "know how to handle: could not set dirty bit";
+        LOG(ERROR) << "could not set dirty bit: " << mdb_strerror(rc);
+		mdb_txn_abort(txn);
         return false;
     }
 
@@ -317,73 +286,58 @@ datalayer :: save_state(const server_id& us,
               + pack_size(coordinator);
     std::auto_ptr<e::buffer> state(e::buffer::create(sz));
     *state << us << bind_to << coordinator;
-    st = m_db->Put(wopts, DB_SLICE("state", 5),
-                   DB_SLICE(reinterpret_cast<const char*>(state->data()), state->size()));
+	MVS(key, "state");
+	val.mv_data = state->data();
+	val.mv_size = state->size();
+	rc = mdb_put(txn, m_dbi, &key, &val, 0);
+	if (rc == MDB_SUCCESS)
+	{
+		rc = mdb_txn_commit(txn);
+		if (rc == MDB_SUCCESS)
+			return true;
+		txn = NULL;
+	}
 
-    if (st.ok())
-    {
-        return true;
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "could not save state: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: "
-                   << "could not save state: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: "
-                   << "could not save state: "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't "
-                   << "know how to handle: could not save state";
-        return false;
-    }
+	if (txn)
+		mdb_txn_abort(txn);
+
+    LOG(ERROR) << "could not save state: " << mdb_strerror(rc);
+    return false;
 }
 
 bool
 datalayer :: clear_dirty()
 {
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
-    DB_SLICE key("dirty", 5);
-    leveldb::Status st = m_db->Delete(wopts, key);
+	MDB_txn *txn;
+	MDB_val key;
+	int rc;
 
-    if (st.ok() || st.IsNotFound())
-    {
-        return true;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: "
-                   << "could not clear dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: "
-                   << "could not clear dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't "
-                   << "know how to handle: could not clear dirty bit";
-        return false;
-    }
+	MVS(key, "dirty");
+
+	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	if (rc)
+	{
+		LOG(ERROR) << "could not open txn: " << mdb_strerror(rc);
+		return false;
+	}
+	rc = mdb_del(txn, m_dbi, &key, 0);
+	if (rc == MDB_NOTFOUND)
+	{
+		mdb_txn_abort(txn);
+		return true;
+	}
+	if (rc == MDB_SUCCESS)
+	{
+		rc = mdb_txn_commit(txn);
+		if (rc == MDB_SUCCESS)
+			return true;
+		txn = NULL;
+	}
+	if (txn)
+		mdb_txn_abort(txn);
+
+    LOG(ERROR) << "could not clear dirty bit: " << mdb_strerror(rc);
+    return false;
 }
 
 void
@@ -440,18 +394,17 @@ bool
 datalayer :: get_property(const e::slice& property,
                           std::string* value)
 {
-    leveldb::Slice prop(reinterpret_cast<const char*>(property.data()), property.size());
-    return m_db->GetProperty(prop, value);
+	return false;
 }
 
 uint64_t
 datalayer :: approximate_size()
 {
-    leveldb::Slice start("\x00", 1);
-    leveldb::Slice limit("\xff", 1);
-    leveldb::Range r(start, limit);
-    uint64_t ret = 0;
-    m_db->GetApproximateSizes(&r, 1, &ret);
+    uint64_t ret;
+	MDB_stat st;
+	mdb_env_stat(m_db, &st);
+	ret = (st.ms_branch_pages + st.ms_leaf_pages + st.ms_overflow_pages) * st.ms_psize;
+
     return ret;
 }
 
@@ -462,6 +415,8 @@ datalayer :: get(const region_id& ri,
                  uint64_t* version,
                  reference* ref)
 {
+	int rc;
+	MDB_val k, val;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
 
@@ -470,23 +425,25 @@ datalayer :: get(const region_id& ri,
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    leveldb::Status st = m_db->Get(opts, lkey, &ref->m_backing);
-
-    if (st.ok())
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ref->m_rtxn);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
+	MVSL(k,lkey);
+	rc = mdb_get(ref->m_rtxn, m_dbi, &k, &val);
+	if (rc == MDB_SUCCESS)
     {
-        e::slice v(ref->m_backing.data(), ref->m_backing.size());
+        e::slice v(val.mv_data, val.mv_size);
         return decode_value(v, value, version);
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         return NOT_FOUND;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -497,7 +454,9 @@ datalayer :: del(const region_id& ri,
                  const e::slice& key,
                  const std::vector<e::slice>& old_value)
 {
-    DB_WBATCH updates;
+    MDB_txn *updates;
+	MDB_val k, val;
+	int rc;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
 
@@ -505,12 +464,24 @@ datalayer :: del(const region_id& ri,
     DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
+	rc = mdb_txn_begin(m_db, NULL, 0, &updates);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
+
     // delete the actual object
-    updates.Delete(lkey);
+	MVSL(k,lkey);
+	rc = mdb_del(updates, m_dbi, &k, 0);
+	if (rc)
+	{
+		mdb_txn_abort(updates);
+		return handle_error(rc);
+	}
 
     // delete the index entries
     const subspace& sub(*m_daemon->m_config.get_subspace(ri));
-    create_index_changes(sc, sub, ri, key, &old_value, NULL, &updates);
+    create_index_changes(sc, sub, ri, key, &old_value, NULL, updates);
 
     // Mark acked as part of this batch write
     if (seq_id != 0)
@@ -518,9 +489,13 @@ datalayer :: del(const region_id& ri,
         char abacking[ACKED_BUF_SIZE];
         seq_id = UINT64_MAX - seq_id;
         encode_acked(ri, reg_id, seq_id, abacking);
-        DB_SLICE akey(abacking, ACKED_BUF_SIZE);
-        DB_SLICE aval("", 0);
-        updates.Put(akey, aval);
+		MVBF(k,abacking);
+		MVS(val, "");
+		rc = mdb_put(updates, m_dbi, &k, &val, 0);
+		if (rc) {
+			mdb_txn_abort(updates);
+			return handle_error(rc);
+		}
     }
 
     uint64_t count;
@@ -531,29 +506,32 @@ datalayer :: del(const region_id& ri,
         char tbacking[TRANSFER_BUF_SIZE];
         capture_id cid = m_daemon->m_config.capture_for(ri);
         assert(cid != capture_id());
-        DB_SLICE tkey(tbacking, TRANSFER_BUF_SIZE);
+		MVBF(k,tbacking);
         DB_SLICE tval;
         encode_transfer(cid, count, tbacking);
         encode_key_value(key, NULL, 0, &scratch, &tval);
-        updates.Put(tkey, tval);
+		MVSL(val,tval);
+		rc = mdb_put(updates, m_dbi, &k, &val, 0);
+		if (rc) {
+			mdb_txn_abort(updates);
+			return handle_error(rc);
+		}
     }
 
     // Perform the write
-    leveldb::WriteOptions opts;
-    opts.sync = false;
-    leveldb::Status st = m_db->Write(opts, &updates);
+	rc = mdb_txn_commit(updates);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
         return SUCCESS;
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         return NOT_FOUND;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -565,10 +543,18 @@ datalayer :: put(const region_id& ri,
                  const std::vector<e::slice>& new_value,
                  uint64_t version)
 {
-    DB_WBATCH updates;
+    MDB_txn *updates;
+	MDB_val k, val;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch1;
     std::vector<char> scratch2;
+	int rc;
+
+	rc = mdb_txn_begin(m_db, NULL, 0, &updates);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
 
     // create the encoded key
     DB_SLICE lkey;
@@ -579,21 +565,33 @@ datalayer :: put(const region_id& ri,
     encode_value(new_value, version, &scratch2, &lval);
 
     // put the actual object
-    updates.Put(lkey, lval);
+	MVSL(k,lkey);
+	MVSL(val,lval);
+	rc = mdb_put(updates, m_dbi, &k, &val, 0);
+	if (rc)
+	{
+		mdb_txn_abort(updates);
+		return handle_error(rc);
+	}
 
     // put the index entries
     const subspace& sub(*m_daemon->m_config.get_subspace(ri));
-    create_index_changes(sc, sub, ri, key, NULL, &new_value, &updates);
+    create_index_changes(sc, sub, ri, key, NULL, &new_value, updates);
 
     // Mark acked as part of this batch write
     if (seq_id != 0)
     {
         char abacking[ACKED_BUF_SIZE];
         seq_id = UINT64_MAX - seq_id;
+		MVBF(k,abacking);
+		MVS(val, "");
         encode_acked(ri, reg_id, seq_id, abacking);
-        DB_SLICE akey(abacking, ACKED_BUF_SIZE);
-        DB_SLICE aval("", 0);
-        updates.Put(akey, aval);
+        rc = mdb_put(updates, m_dbi, &k, &val, 0);
+		if (rc)
+		{
+			mdb_txn_abort(updates);
+			return handle_error(rc);
+		}
     }
 
     uint64_t count;
@@ -604,25 +602,29 @@ datalayer :: put(const region_id& ri,
         char tbacking[TRANSFER_BUF_SIZE];
         capture_id cid = m_daemon->m_config.capture_for(ri);
         assert(cid != capture_id());
-        DB_SLICE tkey(tbacking, TRANSFER_BUF_SIZE);
         DB_SLICE tval;
+		MVBF(k,tbacking);
         encode_transfer(cid, count, tbacking);
         encode_key_value(key, &new_value, version, &scratch1, &tval);
-        updates.Put(tkey, tval);
+		MVSL(val,tval);
+        rc = mdb_put(updates, m_dbi, &k, &val, 0);
+		if (rc)
+		{
+			mdb_txn_abort(updates);
+			return handle_error(rc);
+		}
     }
 
     // Perform the write
-    leveldb::WriteOptions opts;
-    opts.sync = false;
-    leveldb::Status st = m_db->Write(opts, &updates);
+	rc = mdb_txn_commit(updates);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
         return SUCCESS;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -635,10 +637,18 @@ datalayer :: overput(const region_id& ri,
                      const std::vector<e::slice>& new_value,
                      uint64_t version)
 {
-    DB_WBATCH updates;
+    MDB_txn *updates;
+	MDB_val k, val;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch1;
     std::vector<char> scratch2;
+	int rc;
+
+	rc = mdb_txn_begin(m_db, NULL, 0, &updates);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
 
     // create the encoded key
     DB_SLICE lkey;
@@ -649,11 +659,18 @@ datalayer :: overput(const region_id& ri,
     encode_value(new_value, version, &scratch2, &lval);
 
     // put the actual object
-    updates.Put(lkey, lval);
+	MVSL(k,lkey);
+	MVSL(val,lval);
+	rc = mdb_put(updates, m_dbi, &k, &val, 0);
+	if (rc)
+	{
+		mdb_txn_abort(updates);
+		return handle_error(rc);
+	}
 
     // put the index entries
     const subspace& sub(*m_daemon->m_config.get_subspace(ri));
-    create_index_changes(sc, sub, ri, key, &old_value, &new_value, &updates);
+    create_index_changes(sc, sub, ri, key, &old_value, &new_value, updates);
 
     // Mark acked as part of this batch write
     if (seq_id != 0)
@@ -661,9 +678,14 @@ datalayer :: overput(const region_id& ri,
         char abacking[ACKED_BUF_SIZE];
         seq_id = UINT64_MAX - seq_id;
         encode_acked(ri, reg_id, seq_id, abacking);
-        DB_SLICE akey(abacking, ACKED_BUF_SIZE);
-        DB_SLICE aval("", 0);
-        updates.Put(akey, aval);
+		MVBF(k,abacking);
+		MVS(val, "");
+        rc = mdb_put(updates, m_dbi, &k, &val, 0);
+		if (rc)
+		{
+			mdb_txn_abort(updates);
+			return handle_error(rc);
+		}
     }
 
     uint64_t count;
@@ -674,25 +696,29 @@ datalayer :: overput(const region_id& ri,
         char tbacking[TRANSFER_BUF_SIZE];
         capture_id cid = m_daemon->m_config.capture_for(ri);
         assert(cid != capture_id());
-        DB_SLICE tkey(tbacking, TRANSFER_BUF_SIZE);
+		MVBF(k, tbacking);
         DB_SLICE tval;
         encode_transfer(cid, count, tbacking);
         encode_key_value(key, &new_value, version, &scratch1, &tval);
-        updates.Put(tkey, tval);
+		MVSL(val,tval);
+        rc = mdb_put(updates, m_dbi, &k, &val, 0);
+		if (rc)
+		{
+			mdb_txn_abort(updates);
+			return handle_error(rc);
+		}
     }
 
     // Perform the write
-    leveldb::WriteOptions opts;
-    opts.sync = false;
-    leveldb::Status st = m_db->Write(opts, &updates);
+	rc = mdb_txn_commit(updates);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
         return SUCCESS;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -700,46 +726,57 @@ datalayer::returncode
 datalayer :: uncertain_del(const region_id& ri,
                            const e::slice& key)
 {
+    MDB_txn *txn;
+	MDB_val k, val;
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
+	int rc;
+
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
 
     // create the encoded key
     DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
-    std::string ref;
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    leveldb::Status st = m_db->Get(opts, lkey, &ref);
+	MVSL(k,lkey);
+	rc = mdb_get(txn, m_dbi, &k, &val);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
         std::vector<e::slice> old_value;
         uint64_t old_version;
-        returncode rc = decode_value(e::slice(ref.data(), ref.size()),
+        returncode rc = decode_value(e::slice(val.mv_data, val.mv_size),
                                      &old_value, &old_version);
 
         if (rc != SUCCESS)
         {
+			mdb_txn_abort(txn);
             return rc;
         }
 
         if (old_value.size() + 1 != sc.attrs_sz)
         {
+			mdb_txn_abort(txn);
             return BAD_ENCODING;
         }
 
-        return del(ri, region_id(), 0, key, old_value);
+        rc =  del(ri, region_id(), 0, key, old_value);
+		mdb_txn_abort(txn);
+		return rc;
     }
-    else if (st.IsNotFound())
+	mdb_txn_abort(txn);
+    if (rc == MDB_NOTFOUND)
     {
         return SUCCESS;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -751,44 +788,55 @@ datalayer :: uncertain_put(const region_id& ri,
 {
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
+	MDB_txn *txn;
+	MDB_val k, val;
+	int rc;
+
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
 
     // create the encoded key
     DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
-    std::string ref;
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    leveldb::Status st = m_db->Get(opts, lkey, &ref);
+	MVSL(k,lkey);
+	rc = mdb_get(txn, m_dbi, &k, &val);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
         std::vector<e::slice> old_value;
         uint64_t old_version;
-        returncode rc = decode_value(e::slice(ref.data(), ref.size()),
+        returncode rc = decode_value(e::slice(val.mv_data, val.mv_size),
                                      &old_value, &old_version);
 
         if (rc != SUCCESS)
         {
+			mdb_txn_abort(txn);
             return rc;
         }
 
         if (old_value.size() + 1 != sc.attrs_sz)
         {
+			mdb_txn_abort(txn);
             return BAD_ENCODING;
         }
 
-        return overput(ri, region_id(), 0, key, old_value, new_value, version);
+        rc = overput(ri, region_id(), 0, key, old_value, new_value, version);
+		mdb_txn_abort(txn);
+		return rc;
     }
-    else if (st.IsNotFound())
+	mdb_txn_abort(txn);
+    if (rc == MDB_NOTFOUND)
     {
         return put(ri, region_id(), 0, key, new_value, version);
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -801,28 +849,32 @@ datalayer :: get_transfer(const region_id& ri,
                           uint64_t* version,
                           reference* ref)
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
+	MDB_val k,val;
+	int rc;
     char tbacking[TRANSFER_BUF_SIZE];
     capture_id cid = m_daemon->m_config.capture_for(ri);
     assert(cid != capture_id());
-    DB_SLICE lkey(tbacking, TRANSFER_BUF_SIZE);
+	MVBF(k,tbacking);
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ref->m_rtxn);
+	if (rc)
+	{
+		return handle_error(rc);
+	}
     encode_transfer(cid, seq_no, tbacking);
-    leveldb::Status st = m_db->Get(opts, lkey, &ref->m_backing);
+	rc = mdb_get(ref->m_rtxn, m_dbi, &k, &val);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
-        e::slice v(ref->m_backing.data(), ref->m_backing.size());
+        e::slice v(val.mv_data, val.mv_size);
         return decode_key_value(v, has_value, key, value, version);
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         return NOT_FOUND;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -831,40 +883,34 @@ datalayer :: check_acked(const region_id& ri,
                          const region_id& reg_id,
                          uint64_t seq_id)
 {
+	MDB_txn *txn;
     // make it so that increasing seq_ids are ordered in reverse in the KVS
     seq_id = UINT64_MAX - seq_id;
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
+	int rc;
     char abacking[ACKED_BUF_SIZE];
+	MDB_val k;
     encode_acked(ri, reg_id, seq_id, abacking);
-    DB_SLICE akey(abacking, ACKED_BUF_SIZE);
-    std::string val;
-    leveldb::Status st = m_db->Get(opts, akey, &val);
+	MVBF(k,abacking);
 
-    if (st.ok())
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	if (rc)
+	{
+		return false;
+	}
+	rc = mdb_get(txn, m_dbi, &k, NULL);
+	mdb_txn_abort(txn);
+    if (rc == MDB_SUCCESS)
     {
         return true;
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
         return false;
     }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        LOG(ERROR) << "DB error at region=" << reg_id
+                   << " seq_id=" << seq_id << " desc=" << mdb_strerror(rc);
         return false;
     }
 }
@@ -874,38 +920,40 @@ datalayer :: mark_acked(const region_id& ri,
                         const region_id& reg_id,
                         uint64_t seq_id)
 {
+	MDB_txn *txn;
+	MDB_val k, val;
     // make it so that increasing seq_ids are ordered in reverse in the KVS
     seq_id = UINT64_MAX - seq_id;
-    leveldb::WriteOptions opts;
-    opts.sync = false;
+	int rc;
     char abacking[ACKED_BUF_SIZE];
     encode_acked(ri, reg_id, seq_id, abacking);
-    DB_SLICE akey(abacking, ACKED_BUF_SIZE);
-    DB_SLICE val("", 0);
-    leveldb::Status st = m_db->Put(opts, akey, val);
+	MVBF(k,abacking);
+	MVS(val, "");
 
-    if (st.ok())
+	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	if (rc)
+	{
+		return;
+	}
+	rc = mdb_put(txn, m_dbi, &k, &val, 0);
+	if (rc == MDB_SUCCESS)
+		rc = mdb_txn_commit(txn);
+	else
+		mdb_txn_abort(txn);
+
+    if (rc == MDB_SUCCESS)
     {
         // Yay!
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         LOG(ERROR) << "mark_acked returned NOT_FOUND at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
+                   << " seq_id=" << seq_id << " desc=" << mdb_strerror(rc);
     }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        LOG(ERROR) << "DB error at region=" << reg_id
+                   << " seq_id=" << seq_id << " desc=" << mdb_strerror(rc);
     }
 }
 
@@ -913,28 +961,41 @@ void
 datalayer :: max_seq_id(const region_id& reg_id,
                         uint64_t* seq_id)
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = false;
-    opts.verify_checksums = true;
-    opts.snapshot = NULL;
-    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
+	MDB_txn *txn;
+	MDB_cursor *mc;
+	MDB_val k;
     char abacking[ACKED_BUF_SIZE];
-    encode_acked(reg_id, reg_id, 0, abacking);
-    DB_SLICE key(abacking, ACKED_BUF_SIZE);
-    it->Seek(key);
+	int rc;
 
-    if (!it->Valid())
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	if (rc)
+	{
+		return;
+	}
+	rc = mdb_cursor_open(txn, m_dbi, &mc);
+	if (rc)
+	{
+		mdb_txn_abort(txn);
+		return;
+	}
+    encode_acked(reg_id, reg_id, 0, abacking);
+	MVBF(k,abacking);
+	rc = mdb_cursor_get(mc, &k, NULL, MDB_SET_RANGE);
+	mdb_cursor_close(mc);
+
+    if (rc == MDB_NOTFOUND)
     {
         *seq_id = 0;
+		mdb_txn_abort(txn);
         return;
     }
 
-    key = it->key();
     region_id tmp_ri;
     region_id tmp_reg_id;
     uint64_t tmp_seq_id;
-    datalayer::returncode rc = decode_acked(e::slice(key.data(), key.size()),
+    rc = decode_acked(e::slice(k.mv_data, k.mv_size),
                                             &tmp_ri, &tmp_reg_id, &tmp_seq_id);
+	mdb_txn_abort(txn);
 
     if (rc != SUCCESS || tmp_ri != reg_id || tmp_reg_id != reg_id)
     {
@@ -949,24 +1010,36 @@ void
 datalayer :: clear_acked(const region_id& reg_id,
                          uint64_t seq_id)
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = false;
-    opts.verify_checksums = true;
-    opts.snapshot = NULL;
-    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
+	MDB_txn *txn;
+	MDB_cursor *mc;
+	MDB_val k, upper;
+	int rc;
     char abacking[ACKED_BUF_SIZE];
-    encode_acked(region_id(0), reg_id, 0, abacking);
-    it->Seek(DB_SLICE(abacking, ACKED_BUF_SIZE));
-    encode_acked(region_id(0), region_id(reg_id.get() + 1), 0, abacking);
-    DB_SLICE upper_bound(abacking, ACKED_BUF_SIZE);
 
-    while (it->Valid() &&
-           it->key().compare(upper_bound) < 0)
+	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	if (rc)
+	{
+		return;
+	}
+	rc = mdb_cursor_open(txn, m_dbi, &mc);
+	if (rc)
+	{
+		mdb_txn_abort(txn);
+		return;
+	}
+    encode_acked(region_id(0), reg_id, 0, abacking);
+	MVBF(k,abacking);
+	rc = mdb_cursor_get(mc, &k, NULL, MDB_SET_RANGE);
+    encode_acked(region_id(0), region_id(reg_id.get() + 1), 0, abacking);
+	MVBF(upper,abacking);
+
+	while (rc == MDB_SUCCESS &&
+		mdb_cmp(txn, m_dbi, &k, &upper) < 0)
     {
         region_id tmp_ri;
         region_id tmp_reg_id;
         uint64_t tmp_seq_id;
-        datalayer::returncode rc = decode_acked(e::slice(it->key().data(), it->key().size()),
+        rc = decode_acked(e::slice(k.mv_data, k.mv_size),
                                                 &tmp_ri, &tmp_reg_id, &tmp_seq_id);
         tmp_seq_id = UINT64_MAX - tmp_seq_id;
 
@@ -974,32 +1047,30 @@ datalayer :: clear_acked(const region_id& reg_id,
             tmp_reg_id == reg_id &&
             tmp_seq_id < seq_id)
         {
-            leveldb::WriteOptions wopts;
-            wopts.sync = false;
-            leveldb::Status st = m_db->Delete(wopts, it->key());
+			rc = mdb_cursor_del(mc, 0);
 
-            if (st.ok() || st.IsNotFound())
+            if (rc == MDB_SUCCESS)
             {
                 // WOOT!
-            }
-            else if (st.IsCorruption())
-            {
-                LOG(ERROR) << "corruption at the disk layer: could not delete "
-                           << reg_id << " " << seq_id << ": desc=" << st.ToString();
-            }
-            else if (st.IsIOError())
-            {
-                LOG(ERROR) << "IO error at the disk layer: could not delete "
-                           << reg_id << " " << seq_id << ": desc=" << st.ToString();
+				// delete automatically points cursor to next item
+				rc = mdb_cursor_get(mc, &k, NULL, MDB_GET_CURRENT);
             }
             else
             {
-                LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+                LOG(ERROR) << "DB error: could not delete "
+                           << reg_id << " " << seq_id << ": desc=" << mdb_strerror(rc);
             }
-        }
-
-        it->Next();
+        } else 
+		{
+			rc = mdb_cursor_get(mc, &k, NULL, MDB_NEXT);
+		}
     }
+	mdb_cursor_close(mc);
+	rc = mdb_txn_commit(txn);
+	if (rc)
+	{
+		LOG(ERROR) << "DB error: could not commit: " << mdb_strerror(rc);
+	}
 }
 
 void
@@ -1013,7 +1084,10 @@ datalayer :: request_wipe(const capture_id& cid)
 datalayer::snapshot
 datalayer :: make_snapshot()
 {
-    return leveldb_snapshot_ptr(m_db, m_db->GetSnapshot());
+	int rc;
+	MDB_txn *ret = NULL;
+	mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ret);
+    return ret;
 }
 
 datalayer::iterator*
@@ -1021,6 +1095,7 @@ datalayer :: make_region_iterator(snapshot snap,
                                   const region_id& ri,
                                   returncode* error)
 {
+	MDB_cursor *iter = NULL;
     *error = datalayer::SUCCESS;
     const size_t backing_sz = sizeof(uint8_t) + sizeof(uint64_t);
     char backing[backing_sz];
@@ -1028,15 +1103,11 @@ datalayer :: make_region_iterator(snapshot snap,
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
 
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    opts.snapshot = snap.get();
-    leveldb_iterator_ptr iter;
-    iter.reset(snap, m_db->NewIterator(opts));
+	mdb_cursor_open(snap, m_dbi, &iter);
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     return new region_iterator(iter, ri, index_info::lookup(sc.attrs[0].type));
 }
+
 
 datalayer::iterator*
 datalayer :: make_search_iterator(snapshot snap,
@@ -1125,14 +1196,14 @@ datalayer :: make_search_iterator(snapshot snap,
     scan.has_end = false;
     scan.invalid = false;
     full_scan = ki->iterator_from_range(snap, ri, scan, ki);
-    if (ostr) *ostr << "accessing all objects has cost " << full_scan->cost(m_db.get()) << "\n";
+    if (ostr) *ostr << "accessing all objects has cost " << full_scan->cost(m_db) << "\n";
 
     // figure out the cost of each iterator
     // we do this here and not below so that iterators can cache the size and we
     // don't ping-pong between HyperDex and LevelDB.
     for (size_t i = 0; i < iterators.size(); ++i)
     {
-        uint64_t iterator_cost = iterators[i]->cost(m_db.get());
+        uint64_t iterator_cost = iterators[i]->cost(m_db);
         if (ostr) *ostr << "iterator " << *iterators[i] << " has cost " << iterator_cost << "\n";
     }
 
@@ -1158,7 +1229,7 @@ datalayer :: make_search_iterator(snapshot snap,
         best = new intersect_iterator(snap, sorted);
     }
 
-    if (!best || best->cost(m_db.get()) * 4 > full_scan->cost(m_db.get()))
+    if (!best || best->cost(m_db) * 4 > full_scan->cost(m_db))
     {
         best = full_scan;
     }
@@ -1184,20 +1255,20 @@ datalayer :: get_from_iterator(const region_id& ri,
 {
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
+	MDB_val k, val;
+	int rc;
 
     // create the encoded key
     DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, iter->key(), &scratch, &lkey);
 
     // perform the read
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    opts.snapshot = iter->snap().get();
-    leveldb::Status st = m_db->Get(opts, lkey, &ref->m_backing);
+	MVSL(k,lkey);
+	rc = mdb_get(iter->snap(), m_dbi, &k, &val);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
+		ref->m_backing = std::string((const char *)val.mv_data, val.mv_size);
         ref->m_backing += std::string(reinterpret_cast<const char*>(iter->key().data()), iter->key().size());
         *key = e::slice(ref->m_backing.data()
                         + ref->m_backing.size()
@@ -1206,13 +1277,13 @@ datalayer :: get_from_iterator(const region_id& ri,
         e::slice v(ref->m_backing.data(), ref->m_backing.size() - iter->key().size());
         return decode_value(v, value, version);
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         return NOT_FOUND;
     }
     else
     {
-        return handle_error(st);
+        return handle_error(rc);
     }
 }
 
@@ -1265,20 +1336,23 @@ datalayer :: cleaner()
             m_need_cleaning = false;
         }
 
-        leveldb::ReadOptions opts;
-        opts.fill_cache = true;
-        opts.verify_checksums = true;
-        std::auto_ptr<leveldb::Iterator> it;
-        it.reset(m_db->NewIterator(opts));
-        it->Seek(DB_SLICE("t", 1));
+		MDB_txn *txn;
+		MDB_cursor *mc;
+		MDB_val k;
+		int rc;
+
+		rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+		rc = mdb_cursor_open(txn, m_dbi, &mc);
+		MVS(k, "t");
+		rc = mdb_cursor_get(mc, &k, NULL, MDB_SET_RANGE);
         capture_id cached_cid;
 
-        while (it->Valid())
+        while (rc == MDB_SUCCESS)
         {
             uint8_t prefix;
             uint64_t cid;
             uint64_t seq_no;
-            e::unpacker up(it->key().data(), it->key().size());
+            e::unpacker up((const char *)k.mv_data, k.mv_size);
             up = up >> prefix >> cid >> seq_no;
 
             if (up.error() || prefix != 't')
@@ -1288,30 +1362,19 @@ datalayer :: cleaner()
 
             if (cid == cached_cid.get())
             {
-                leveldb::WriteOptions wopts;
-                wopts.sync = false;
-                leveldb::Status st = m_db->Delete(wopts, it->key());
+				rc = mdb_cursor_del(mc, 0);
 
-                if (st.ok() || st.IsNotFound())
+                if (rc == MDB_SUCCESS)
                 {
                     // pass
                 }
-                else if (st.IsCorruption())
-                {
-                    LOG(ERROR) << "corruption at the disk layer: could not cleanup old transfers:"
-                               << " desc=" << st.ToString();
-                }
-                else if (st.IsIOError())
-                {
-                    LOG(ERROR) << "IO error at the disk layer: could not cleanup old transfers:"
-                               << " desc=" << st.ToString();
-                }
                 else
                 {
-                    LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+                    LOG(ERROR) << "DB could not cleanup old transfers:"
+                               << " desc=" << mdb_strerror(rc);
                 }
 
-                it->Next();
+                rc = mdb_cursor_get(mc, &k, NULL, MDB_GET_CURRENT);
                 continue;
             }
 
@@ -1333,8 +1396,16 @@ datalayer :: cleaner()
             char tbacking[TRANSFER_BUF_SIZE];
             DB_SLICE slice(tbacking, TRANSFER_BUF_SIZE);
             encode_transfer(capture_id(cid + 1), 0, tbacking);
-            it->Seek(slice);
+			MVBF(k, tbacking);
+			rc = mdb_cursor_get(mc, &k, NULL, MDB_SET_RANGE);
         }
+		mdb_cursor_close(mc);
+		rc = mdb_txn_commit(txn);
+		if (rc)
+		{
+            LOG(ERROR) << "DB could not cleanup old transfers:"
+                       << " desc=" << mdb_strerror(rc);
+		}
 
         while (!state_transfer_captures.empty())
         {
@@ -1365,32 +1436,33 @@ datalayer :: shutdown()
 }
 
 datalayer::returncode
-datalayer :: handle_error(leveldb::Status st)
+datalayer :: handle_error(int rc)
 {
-    if (st.IsCorruption())
+    if (rc == MDB_CORRUPTED)
     {
-        LOG(ERROR) << "corruption at the disk layer: " << st.ToString();
+        LOG(ERROR) << "corruption at the disk layer: " << mdb_strerror(rc);
         return CORRUPTION;
     }
-    else if (st.IsIOError())
+    else if (rc == MDB_PANIC)
     {
-        LOG(ERROR) << "IO error at the disk layer: " << st.ToString();
+        LOG(ERROR) << "IO error at the disk layer: " << mdb_strerror(rc);
         return IO_ERROR;
     }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        LOG(ERROR) << "DB returned an error that we don't know how to handle" << mdb_strerror(rc);
         return DB_ERROR;
     }
 }
 
 datalayer :: reference :: reference()
-    : m_backing()
+    : m_backing(), m_rtxn()
 {
 }
 
 datalayer :: reference :: ~reference() throw ()
 {
+	mdb_txn_abort(m_rtxn);
 }
 
 void

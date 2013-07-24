@@ -25,9 +25,6 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// LevelDB
-#include <hyperleveldb/write_batch.h>
-
 // e
 #include <e/endian.h>
 
@@ -354,7 +351,7 @@ hyperdex :: create_index_changes(const schema& sc,
                                  const e::slice& key,
                                  const std::vector<e::slice>* old_value,
                                  const std::vector<e::slice>* new_value,
-                                 DB_WBATCH* updates)
+                                 DB_WBATCH updates)
 {
     assert(!old_value || !new_value || old_value->size() == new_value->size());
     assert(!old_value || old_value->size() + 1 == sc.attrs_sz);

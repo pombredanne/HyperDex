@@ -41,19 +41,19 @@ BEGIN_HYPERDEX_NAMESPACE
 class datalayer::iterator
 {
     public:
-        iterator(leveldb_snapshot_ptr snap);
+        iterator(SNAPSHOT_PTR snap);
 
     public:
         virtual bool valid() = 0;
         // REQUIRES: valid
         virtual void next() = 0;
-        virtual uint64_t cost(leveldb::DB*) = 0;
+        virtual uint64_t cost(DB_PTR) = 0;
         // REQUIRES: valid
         virtual e::slice key() = 0;
         virtual std::ostream& describe(std::ostream&) const = 0;
 
     public:
-        leveldb_snapshot_ptr snap();
+        SNAPSHOT_PTR snap();
 
     protected:
         friend class e::intrusive_ptr<iterator>;
@@ -63,7 +63,7 @@ class datalayer::iterator
         size_t m_ref;
 
     private:
-        leveldb_snapshot_ptr m_snap;
+        SNAPSHOT_PTR m_snap;
 };
 
 class datalayer::dummy_iterator : public iterator
@@ -74,7 +74,7 @@ class datalayer::dummy_iterator : public iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(leveldb::DB*);
+        virtual uint64_t cost(DB_PTR);
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
 
@@ -85,14 +85,14 @@ class datalayer::dummy_iterator : public iterator
 class datalayer::region_iterator : public iterator
 {
     public:
-        region_iterator(leveldb_iterator_ptr iter,
+        region_iterator(ITER_PTR iter,
                         const region_id& ri,
                         index_info* di);
 
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(leveldb::DB*);
+        virtual uint64_t cost(DB_PTR);
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
 
@@ -104,7 +104,7 @@ class datalayer::region_iterator : public iterator
         region_iterator& operator = (const region_iterator&);
 
     private:
-        leveldb_iterator_ptr m_iter;
+        ITER_PTR m_iter;
         region_id m_ri;
         std::vector<char> m_decoded;
         index_info* m_di;
@@ -113,7 +113,7 @@ class datalayer::region_iterator : public iterator
 class datalayer::index_iterator : public iterator
 {
     public:
-        index_iterator(leveldb_snapshot_ptr snap);
+        index_iterator(SNAPSHOT_PTR snap);
         virtual ~index_iterator() throw ();
 
     public:
@@ -128,14 +128,14 @@ class datalayer::index_iterator : public iterator
 class datalayer::intersect_iterator : public index_iterator
 {
     public:
-        intersect_iterator(leveldb_snapshot_ptr snap,
+        intersect_iterator(SNAPSHOT_PTR snap,
                            const std::vector<e::intrusive_ptr<index_iterator> >& iterators);
         virtual ~intersect_iterator() throw ();
 
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(leveldb::DB*);
+        virtual uint64_t cost(DB_PTR);
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
         virtual e::slice internal_key();
@@ -161,7 +161,7 @@ class datalayer::search_iterator : public iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(leveldb::DB*);
+        virtual uint64_t cost(DB_PTR);
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
 
