@@ -188,6 +188,7 @@ replication_manager :: key_state :: initialize(datalayer* data,
             m_old_version = 0;
             break;
     }
+	m_old_disk_ref.persist();
 
     return rc;
 }

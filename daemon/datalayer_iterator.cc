@@ -408,6 +408,7 @@ datalayer :: search_iterator :: search_iterator(datalayer* dl,
 
 datalayer :: search_iterator :: ~search_iterator() throw ()
 {
+	mdb_txn_abort(m_iter->snap());
 }
 
 std::ostream&

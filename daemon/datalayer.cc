@@ -434,8 +434,8 @@ datalayer :: get(const region_id& ri,
 	rc = mdb_get(ref->m_rtxn, m_dbi, &k, &val);
 	if (rc == MDB_SUCCESS)
     {
-        e::slice v(val.mv_data, val.mv_size);
-        return decode_value(v, value, version);
+		ref->m_slice = e::slice(val.mv_data, val.mv_size);
+        return decode_value(ref->m_slice, value, version);
     }
     else if (rc == MDB_NOTFOUND)
     {
@@ -865,8 +865,8 @@ datalayer :: get_transfer(const region_id& ri,
 
     if (rc == MDB_SUCCESS)
     {
-        e::slice v(val.mv_data, val.mv_size);
-        return decode_key_value(v, has_value, key, value, version);
+        ref->m_slice = e::slice(val.mv_data, val.mv_size);
+        return decode_key_value(ref->m_slice, has_value, key, value, version);
     }
     else if (rc == MDB_NOTFOUND)
     {
@@ -1086,7 +1086,11 @@ datalayer :: make_snapshot()
 {
 	int rc;
 	MDB_txn *ret = NULL;
-	mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ret);
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ret);
+	if (rc)
+	{
+		LOG(ERROR) << "DB error: could not make rdonly txn: " << mdb_strerror(rc);
+	}
     return ret;
 }
 
@@ -1450,7 +1454,7 @@ datalayer :: handle_error(int rc)
     }
     else
     {
-        LOG(ERROR) << "DB returned an error that we don't know how to handle" << mdb_strerror(rc);
+        LOG(ERROR) << "DB returned an error that we don't know how to handle " << mdb_strerror(rc);
         return DB_ERROR;
     }
 }
@@ -1469,6 +1473,14 @@ void
 datalayer :: reference :: swap(reference* ref)
 {
     m_backing.swap(ref->m_backing);
+}
+
+void
+datalayer :: reference :: persist()
+{
+	m_backing.assign((const char *)m_slice.data(), m_slice.size());
+	mdb_txn_abort(m_rtxn);
+	m_rtxn = NULL;
 }
 
 std::ostream&

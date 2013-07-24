@@ -253,12 +253,14 @@ class datalayer::reference
 
     public:
         void swap(reference* ref);
+		void persist();
 
     private:
         friend class datalayer;
 
     private:
         std::string m_backing;
+		e::slice m_slice;
 		MDB_txn *m_rtxn;
 };
 

@@ -432,6 +432,7 @@ state_transfer_manager :: transfer_more_state(transfer_out_state* tos)
                 break;
             }
 
+			op->ref.persist();
             op->seq_no = tos->next_seq_no;
             ++tos->next_seq_no;
             tos->window.push_back(op);
