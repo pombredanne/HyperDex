@@ -235,7 +235,7 @@ hyperdex_daemon_SOURCES += daemon/state_transfer_manager_transfer_in_state.cc
 hyperdex_daemon_SOURCES += daemon/state_transfer_manager_transfer_out_state.cc
 hyperdex_daemon_LDADD = \
 			$(E_LIBS) \
-			$(BUSYBEE_LIBS) -lhyperleveldb \
+			$(BUSYBEE_LIBS) -llmdb \
 			$(REPLICANT_LIBS) -lcityhash -lpopt -lglog -lpthread
 hyperdex_daemon_CPPFLAGS = $(CPPFLAGS)
 
@@ -543,11 +543,11 @@ hyperdex_show_config_LDADD = libhyperclient.la -lpopt
 
 hyperdex_async_benchmark_SOURCES = tools/async-benchmark.cc
 hyperdex_async_benchmark_CPPFLAGS = -I${abs_top_srcdir}/client $(CPPFLAGS)
-hyperdex_async_benchmark_LDADD = libhyperclient.la -lhyperleveldb $(E_LIBS) -lpopt
+hyperdex_async_benchmark_LDADD = libhyperclient.la -llmdb $(E_LIBS) -lpopt
 
 hyperdex_benchmark_SOURCES = tools/benchmark.cc
 hyperdex_benchmark_CPPFLAGS = -I${abs_top_srcdir}/client $(CPPFLAGS)
-hyperdex_benchmark_LDADD = libhyperclient.la -lhyperleveldb $(E_LIBS) -lpopt
+hyperdex_benchmark_LDADD = libhyperclient.la -llmdb $(E_LIBS) -lpopt
 
 hyperdex_initiate_transfer_SOURCES = tools/initiate-transfer.cc
 hyperdex_initiate_transfer_CPPFLAGS = -I${abs_top_srcdir}/client $(CPPFLAGS)
