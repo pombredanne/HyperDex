@@ -103,7 +103,7 @@ datalayer :: dummy_iterator :: next()
 }
 
 uint64_t
-datalayer :: dummy_iterator :: cost(DB_PTR)
+datalayer :: dummy_iterator :: cost()
 {
     return 0;
 }
@@ -189,8 +189,14 @@ datalayer :: region_iterator :: next()
 }
 
 uint64_t
-datalayer :: region_iterator :: cost(DB_PTR db)
+datalayer :: region_iterator :: cost()
 {
+	MDB_txn *txn;
+	MDB_cursor *mc;
+	MDB_val k1, k2;
+    uint64_t ret = 0;
+	MDB_dbi dbi;
+	int rc;
     const size_t sz = sizeof(uint8_t) + sizeof(uint64_t);
     char buf[2 * sz];
     char* ptr = buf;
@@ -200,12 +206,22 @@ datalayer :: region_iterator :: cost(DB_PTR db)
     ptr = e::pack64be(m_ri.get(), ptr);
     encode_bump(buf + sz, buf + 2 * sz);
     // create the range
-    leveldb::Range r;
-    r.start = DB_SLICE(buf, sz);
-    r.limit = DB_SLICE(buf + sz, sz);
-    // ask leveldb for the size of the range
-    uint64_t ret;
-    db->GetApproximateSizes(&r, 1, &ret);
+	k1.mv_data = buf;
+	k1.mv_size = sz;
+	k2.mv_data = buf + sz;
+	k2.mv_size = sz;
+	txn = mdb_cursor_txn(m_iter);
+	dbi = mdb_cursor_dbi(m_iter);
+	// tally up the sizes of all the keys in [k1,k2)
+	rc = mdb_cursor_open(txn, dbi, &mc);
+	rc = mdb_cursor_get(mc, &k1, NULL, MDB_SET_RANGE);
+	while (rc == MDB_SUCCESS) {
+		if (mdb_cmp(txn, dbi, &k1, &k2) >= 0)
+			break;
+		ret += k1.mv_size;
+		rc = mdb_cursor_get(mc, &k1, NULL, MDB_NEXT);
+	}
+	mdb_cursor_close(mc);
     return ret;
 }
 
@@ -213,8 +229,9 @@ e::slice
 datalayer :: region_iterator :: key()
 {
     const size_t sz = sizeof(uint8_t) + sizeof(uint64_t);
-    DB_SLICE _k = m_iter->key();
-    e::slice k = e::slice(_k.data() + sz, _k.size() - sz);
+	MDB_val _k;
+	mdb_cursor_get(m_iter, &_k, NULL, MDB_GET_CURRENT);
+    e::slice k = e::slice((const char *)_k.mv_data + sz, _k.mv_size - sz);
     size_t decoded_sz = m_di->decoded_size(k);
 
     if (m_decoded.size() < decoded_sz)
@@ -251,7 +268,7 @@ datalayer :: intersect_iterator :: intersect_iterator(SNAPSHOT_PTR s,
 
     for (size_t i = 0; i < m_iters.size(); ++i)
     {
-        iters.push_back(std::make_pair(m_iters[i]->cost(s.db()), m_iters[i]));
+        iters.push_back(std::make_pair(m_iters[i]->cost(), m_iters[i]));
     }
 
     std::sort(iters.begin(), iters.end());
@@ -324,7 +341,7 @@ datalayer :: intersect_iterator :: next()
 }
 
 uint64_t
-datalayer :: intersect_iterator :: cost(DB_PTR)
+datalayer :: intersect_iterator :: cost()
 {
     return m_cost;
 }
@@ -418,23 +435,25 @@ datalayer :: search_iterator :: valid()
     // while the most selective iterator is valid and not past the end
     while (m_iter->valid())
     {
-        leveldb::ReadOptions opts;
-        opts.fill_cache = true;
-        opts.verify_checksums = true;
+		MDB_txn *txn;
+		MDB_val k, val;
         std::vector<char> kbacking;
         DB_SLICE lkey;
+		int rc;
         encode_key(m_ri, sc.attrs[0].type, m_iter->key(), &kbacking, &lkey);
+		MVSL(k,lkey);
 
-        leveldb::Status st = m_dl->m_db->Get(opts, lkey, &ref.m_backing);
+		txn = m_iter->snap();
+		rc = mdb_get(txn, 1, &k, &val);
 
-        if (st.ok())
+        if (rc == MDB_SUCCESS)
         {
-            e::slice v(ref.m_backing.data(), ref.m_backing.size());
-            datalayer::returncode rc = decode_value(v, &value, &version);
+            e::slice v((const char *)val.mv_data, val.mv_size);
+            rc = decode_value(v, &value, &version);
 
             if (rc != SUCCESS)
             {
-                m_error = rc;
+                m_error = (datalayer::returncode)rc;
                 return false;
             }
 
@@ -442,7 +461,7 @@ datalayer :: search_iterator :: valid()
         }
         else
         {
-            m_error = m_dl->handle_error(st);
+            m_error = m_dl->handle_error(rc);
             return false;
         }
 
@@ -467,9 +486,9 @@ datalayer :: search_iterator :: next()
 }
 
 uint64_t
-datalayer :: search_iterator :: cost(DB_PTR db)
+datalayer :: search_iterator :: cost()
 {
-    return m_iter->cost(db);
+    return m_iter->cost();
 }
 
 e::slice

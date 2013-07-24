@@ -120,7 +120,7 @@ index_info :: ~index_info() throw ()
 }
 
 datalayer::index_iterator*
-index_info :: iterator_from_range(leveldb_snapshot_ptr,
+index_info :: iterator_from_range(SNAPSHOT_PTR,
                                   const region_id&,
                                   const range&,
                                   index_info*)
@@ -129,7 +129,7 @@ index_info :: iterator_from_range(leveldb_snapshot_ptr,
 }
 
 datalayer::index_iterator*
-index_info :: iterator_from_check(leveldb_snapshot_ptr,
+index_info :: iterator_from_check(SNAPSHOT_PTR,
                                   const region_id&,
                                   const attribute_check&,
                                   index_info*)

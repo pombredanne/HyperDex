@@ -51,10 +51,11 @@ index_primitive :: index_changes(const region_id& ri,
                                  const e::slice& key,
                                  const e::slice* old_value,
                                  const e::slice* new_value,
-                                 DB_WBATCH* updates)
+                                 DB_WBATCH updates)
 {
     std::vector<char> scratch;
     DB_SLICE slice;
+	MDB_val k;
 
     if (old_value && new_value && *old_value == *new_value)
     {
@@ -64,13 +65,17 @@ index_primitive :: index_changes(const region_id& ri,
     if (old_value)
     {
         index_entry(ri, attr, key_ii, key, *old_value, &scratch, &slice);
-        updates->Delete(slice);
+		MVSL(k,slice);
+		mdb_del(updates, 1, &k, NULL);
     }
 
     if (new_value)
     {
+		MDB_val val;
         index_entry(ri, attr, key_ii, key, *new_value, &scratch, &slice);
-        updates->Put(slice, DB_SLICE());
+		MVSL(k,slice);
+		MVS(val, "");
+		mdb_put(updates, 1, &k, &val, 0);
     }
 }
 
@@ -168,8 +173,8 @@ namespace
 {
 
 using hyperdex::index_info;
-using hyperdex::leveldb_iterator_ptr;
-using hyperdex::leveldb_snapshot_ptr;
+//using hyperdex::leveldb_iterator_ptr;
+//using hyperdex::leveldb_snapshot_ptr;
 using hyperdex::range;
 using hyperdex::region_id;
 
@@ -195,7 +200,7 @@ decode_entry(const DB_SLICE& in,
         return false;
     }
 
-    const char* ptr = in.data();
+    const char* ptr = (const char *)in.data();
     uint8_t type;
     uint64_t region;
     ptr = e::unpack8be(ptr, &type);
@@ -259,7 +264,7 @@ decode_entry(const DB_SLICE& in,
 class range_iterator : public datalayer::index_iterator
 {
     public:
-        range_iterator(leveldb_snapshot_ptr snap,
+        range_iterator(SNAPSHOT_PTR snap,
                        const region_id& ri, 
                        const range& r,
                        index_primitive* val_ii,
@@ -269,7 +274,7 @@ class range_iterator : public datalayer::index_iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(leveldb::DB*);
+        virtual uint64_t cost();
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
         virtual e::slice internal_key();
@@ -281,7 +286,7 @@ class range_iterator : public datalayer::index_iterator
         range_iterator& operator = (const range_iterator&);
 
     private:
-        leveldb_iterator_ptr m_iter;
+        ITER_PTR m_iter;
         region_id m_ri;
         range m_range;
         index_primitive* m_val_ii;
@@ -290,7 +295,7 @@ class range_iterator : public datalayer::index_iterator
         bool m_invalid;
 };
 
-range_iterator :: range_iterator(leveldb_snapshot_ptr s,
+range_iterator :: range_iterator(SNAPSHOT_PTR s,
                                  const region_id& ri, 
                                  const range& r,
                                  index_primitive* val_ii,
@@ -304,13 +309,10 @@ range_iterator :: range_iterator(leveldb_snapshot_ptr s,
     , m_scratch()
     , m_invalid(false)
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    opts.snapshot = s.get();
-    m_iter.reset(s, s.db()->NewIterator(opts));
-
     DB_SLICE slice;
+	MDB_val k;
+
+	mdb_cursor_open(s, 1, &m_iter);
 
     if (m_range.has_start)
     {
@@ -320,20 +322,24 @@ range_iterator :: range_iterator(leveldb_snapshot_ptr s,
     {
         m_val_ii->index_entry(m_ri, m_range.attr, &m_scratch, &slice);
     }
-
-    m_iter->Seek(slice);
+	MVSL(k,slice);
+	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
 }
 
 range_iterator :: ~range_iterator() throw ()
 {
+	mdb_cursor_close(m_iter);
 }
 
 bool
 range_iterator :: valid()
 {
-    while (!m_invalid && m_iter->Valid())
+	MDB_val kk;
+	int rc;
+	rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+    while (!m_invalid && rc == MDB_SUCCESS)
     {
-        DB_SLICE _k = m_iter->key();
+        DB_SLICE _k = DB_SLICE(kk.mv_data, kk.mv_size);
         region_id ri;
         uint16_t attr;
         e::slice v;
@@ -368,7 +374,7 @@ range_iterator :: valid()
         // if v > end
         if (cmp == 0 && m_range.end.size() < v.size())
         {
-            m_iter->Next();
+            rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_NEXT);
             continue;
         }
 
@@ -381,23 +387,37 @@ range_iterator :: valid()
 void
 range_iterator :: next()
 {
-    m_iter->Next();
+	mdb_cursor_get(m_iter, NULL, NULL, MDB_NEXT);
 }
 
 uint64_t
-range_iterator :: cost(leveldb::DB* db)
+range_iterator :: cost()
 {
+	MDB_txn *txn;
+	MDB_cursor *mc;
+	MDB_val k1, k2;
+    uint64_t ret = 0;
+	MDB_dbi dbi;
+	int rc;
     assert(this->sorted());
     DB_SLICE upper;
     m_val_ii->index_entry(m_ri, m_range.attr, m_range.end, &m_scratch, &upper);
     hyperdex::encode_bump(&m_scratch.front(), &m_scratch.front() + m_scratch.size());
     // create the range
-    leveldb::Range r;
-    r.start = m_iter->key();
-    r.limit = upper;
-    // ask leveldb for the size of the range
-    uint64_t ret;
-    db->GetApproximateSizes(&r, 1, &ret);
+	txn = mdb_cursor_txn(m_iter);
+	dbi = mdb_cursor_dbi(m_iter);
+	mdb_cursor_open(txn, dbi, &mc);
+	mdb_cursor_get(m_iter, &k1, NULL, MDB_GET_CURRENT);
+	MVSL(k2,upper);
+    // tally up the costs
+	rc = mdb_cursor_get(mc, &k1, NULL, MDB_SET_RANGE);
+	while (rc == MDB_SUCCESS) {
+		if (mdb_cmp(txn, dbi, &k1, &k2) >= 0)
+			break;
+		ret += k1.mv_size;
+		rc = mdb_cursor_get(mc, &k1, NULL, MDB_NEXT);
+	}
+	mdb_cursor_close(mc);
     return ret;
 }
 
@@ -425,11 +445,14 @@ range_iterator :: describe(std::ostream& out) const
 e::slice
 range_iterator :: internal_key()
 {
-    DB_SLICE _k = m_iter->key();
+	MDB_val kk;
+    DB_SLICE _k;
     region_id ri;
     uint16_t attr;
     e::slice v;
     e::slice k;
+	mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+	_k = DB_SLICE((const char *)kk.mv_data, kk.mv_size);
     decode_entry(_k, m_val_ii, m_key_ii, &ri, &attr, &v, &k);
     return k;
 }
@@ -443,16 +466,18 @@ range_iterator :: sorted()
 void
 range_iterator :: seek(const e::slice& ik)
 {
+	MDB_val k;
     assert(sorted());
     DB_SLICE slice;
     m_val_ii->index_entry(m_ri, m_range.attr, m_key_ii, m_range.start, ik, &m_scratch, &slice);
-    m_iter->Seek(slice);
+	MVSL(k,slice);
+	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
 }
 
 class key_iterator : public datalayer::index_iterator
 {
     public:
-        key_iterator(leveldb_snapshot_ptr snap,
+        key_iterator(SNAPSHOT_PTR snap,
                      const region_id& ri, 
                      const range& r,
                      index_info* key_ii);
@@ -461,7 +486,7 @@ class key_iterator : public datalayer::index_iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(leveldb::DB*);
+        virtual uint64_t cost();
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
         virtual e::slice internal_key();
@@ -473,7 +498,7 @@ class key_iterator : public datalayer::index_iterator
         key_iterator& operator = (const key_iterator&);
 
     private:
-        leveldb_iterator_ptr m_iter;
+        ITER_PTR m_iter;
         region_id m_ri;
         range m_range;
         index_info* m_key_ii;
@@ -481,7 +506,7 @@ class key_iterator : public datalayer::index_iterator
         bool m_invalid;
 };
 
-key_iterator :: key_iterator(leveldb_snapshot_ptr s,
+key_iterator :: key_iterator(SNAPSHOT_PTR s,
                              const region_id& ri, 
                              const range& r,
                              index_info* key_ii)
@@ -494,13 +519,10 @@ key_iterator :: key_iterator(leveldb_snapshot_ptr s,
     , m_invalid(false)
 {
     assert(m_range.attr == 0);
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    opts.snapshot = s.get();
-    m_iter.reset(s, s.db()->NewIterator(opts));
+	mdb_cursor_open(s, 1, &m_iter);
 
     DB_SLICE slice;
+	MDB_val k;
 
     if (m_range.has_start)
     {
@@ -511,19 +533,24 @@ key_iterator :: key_iterator(leveldb_snapshot_ptr s,
         encode_object_region(m_ri, &m_scratch, &slice);
     }
 
-    m_iter->Seek(slice);
+	MVSL(k,slice);
+	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
 }
 
 key_iterator :: ~key_iterator() throw ()
 {
+	mdb_cursor_close(m_iter);
 }
 
 bool
 key_iterator :: valid()
 {
-    while (!m_invalid && m_iter->Valid())
+	MDB_val kk;
+	int rc;
+	rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+    while (!m_invalid && rc == MDB_SUCCESS)
     {
-        DB_SLICE _k = m_iter->key();
+        DB_SLICE _k = DB_SLICE((const char *)kk.mv_data, kk.mv_size);
         region_id ri;
         e::slice k;
 
@@ -551,7 +578,7 @@ key_iterator :: valid()
         // if k > end
         if (cmp == 0 && m_range.end.size() < k.size())
         {
-            m_iter->Next();
+            rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_NEXT);
             continue;
         }
 
@@ -564,23 +591,37 @@ key_iterator :: valid()
 void
 key_iterator :: next()
 {
-    m_iter->Next();
+	mdb_cursor_get(m_iter, NULL, NULL, MDB_NEXT);
 }
 
 uint64_t
-key_iterator :: cost(leveldb::DB* db)
+key_iterator :: cost()
 {
+	MDB_txn *txn;
+	MDB_cursor *mc;
+	MDB_val k1, k2;
+    uint64_t ret = 0;
+	MDB_dbi dbi;
+	int rc;
     assert(this->sorted());
     DB_SLICE upper;
     encode_key(m_ri, m_range.type, m_range.end, &m_scratch, &upper);
     hyperdex::encode_bump(&m_scratch.front(), &m_scratch.front() + m_scratch.size());
     // create the range
-    leveldb::Range r;
-    r.start = m_iter->key();
-    r.limit = upper;
-    // ask leveldb for the size of the range
-    uint64_t ret;
-    db->GetApproximateSizes(&r, 1, &ret);
+	txn = mdb_cursor_txn(m_iter);
+	dbi = mdb_cursor_dbi(m_iter);
+	mdb_cursor_open(txn, dbi, &mc);
+	mdb_cursor_get(m_iter, &k1, NULL, MDB_GET_CURRENT);
+	MVSL(k2,upper);
+    // tally up the costs
+	rc = mdb_cursor_get(mc, &k1, NULL, MDB_SET_RANGE);
+	while (rc == MDB_SUCCESS) {
+		if (mdb_cmp(txn, dbi, &k1, &k2) >= 0)
+			break;
+		ret += k1.mv_size;
+		rc = mdb_cursor_get(mc, &k1, NULL, MDB_NEXT);
+	}
+	mdb_cursor_close(mc);
     return ret;
 }
 
@@ -610,7 +651,9 @@ key_iterator :: internal_key()
 {
     region_id ri;
     e::slice k;
-    DB_SLICE _k = m_iter->key();
+	MDB_val kk;
+	mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+    DB_SLICE _k = DB_SLICE((const char *)kk.mv_data, kk.mv_size);
     decode_key(_k, &ri, &k);
     return k;
 }
@@ -625,14 +668,16 @@ void
 key_iterator :: seek(const e::slice& ik)
 {
     DB_SLICE slice;
+	MDB_val k;
     encode_key(m_ri, m_range.type, ik, &m_scratch, &slice);
-    m_iter->Seek(slice);
+	MVSL(k,slice);
+	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
 }
 
 } // namespace
 
 datalayer::index_iterator*
-index_primitive :: iterator_from_range(leveldb_snapshot_ptr snap,
+index_primitive :: iterator_from_range(SNAPSHOT_PTR snap,
                                        const region_id& ri, 
                                        const range& r,
                                        index_info* key_ii)

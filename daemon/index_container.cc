@@ -83,7 +83,7 @@ index_container :: index_changes(const region_id& ri,
                                  const e::slice& key,
                                  const e::slice* old_value,
                                  const e::slice* new_value,
-                                 DB_WBATCH* updates)
+                                 DB_WBATCH updates)
 {
     std::vector<e::slice> old_elems;
     std::vector<e::slice> new_elems;
@@ -152,7 +152,7 @@ index_container :: index_changes(const region_id& ri,
 }
 
 datalayer::index_iterator*
-index_container :: iterator_from_check(leveldb_snapshot_ptr snap,
+index_container :: iterator_from_check(SNAPSHOT_PTR snap,
                                        const region_id& ri,
                                        const attribute_check& c,
                                        index_info* key_ii)

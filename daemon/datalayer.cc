@@ -1196,14 +1196,14 @@ datalayer :: make_search_iterator(snapshot snap,
     scan.has_end = false;
     scan.invalid = false;
     full_scan = ki->iterator_from_range(snap, ri, scan, ki);
-    if (ostr) *ostr << "accessing all objects has cost " << full_scan->cost(m_db) << "\n";
+    if (ostr) *ostr << "accessing all objects has cost " << full_scan->cost() << "\n";
 
     // figure out the cost of each iterator
     // we do this here and not below so that iterators can cache the size and we
     // don't ping-pong between HyperDex and LevelDB.
     for (size_t i = 0; i < iterators.size(); ++i)
     {
-        uint64_t iterator_cost = iterators[i]->cost(m_db);
+        uint64_t iterator_cost = iterators[i]->cost();
         if (ostr) *ostr << "iterator " << *iterators[i] << " has cost " << iterator_cost << "\n";
     }
 
@@ -1229,7 +1229,7 @@ datalayer :: make_search_iterator(snapshot snap,
         best = new intersect_iterator(snap, sorted);
     }
 
-    if (!best || best->cost(m_db) * 4 > full_scan->cost(m_db))
+    if (!best || best->cost() * 4 > full_scan->cost())
     {
         best = full_scan;
     }

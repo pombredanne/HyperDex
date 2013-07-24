@@ -47,7 +47,7 @@ class datalayer::iterator
         virtual bool valid() = 0;
         // REQUIRES: valid
         virtual void next() = 0;
-        virtual uint64_t cost(DB_PTR) = 0;
+        virtual uint64_t cost() = 0;
         // REQUIRES: valid
         virtual e::slice key() = 0;
         virtual std::ostream& describe(std::ostream&) const = 0;
@@ -74,7 +74,7 @@ class datalayer::dummy_iterator : public iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(DB_PTR);
+        virtual uint64_t cost();
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
 
@@ -92,7 +92,7 @@ class datalayer::region_iterator : public iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(DB_PTR);
+        virtual uint64_t cost();
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
 
@@ -135,7 +135,7 @@ class datalayer::intersect_iterator : public index_iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(DB_PTR);
+        virtual uint64_t cost();
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
         virtual e::slice internal_key();
@@ -161,7 +161,7 @@ class datalayer::search_iterator : public iterator
     public:
         virtual bool valid();
         virtual void next();
-        virtual uint64_t cost(DB_PTR);
+        virtual uint64_t cost();
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
 
