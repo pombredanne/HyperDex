@@ -105,7 +105,7 @@ datalayer :: setup(const po6::pathname& path,
 	}
 	m_db.reset(tmp_db, mdb_env_close);
 	rc = mdb_env_set_mapsize(tmp_db, msize);
-	rc = mdb_env_open(tmp_db, path.get(), MDB_WRITEMAP|MDB_NOMETASYNC, 0600);
+	rc = mdb_env_open(tmp_db, path.get(), MDB_WRITEMAP|MDB_NOMETASYNC|MDB_NOTLS, 0600);
 	if (rc)
 	{
         LOG(ERROR) << "could not open LMDB env: " << mdb_strerror(rc);
