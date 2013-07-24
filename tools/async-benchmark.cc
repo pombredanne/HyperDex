@@ -32,7 +32,9 @@
 #include <tr1/unordered_map>
 
 // LevelDB
-#include <hyperleveldb/db.h>
+//#include <hyperleveldb/db.h>
+
+#include <cassert>
 
 // po6
 #include <po6/error.h>

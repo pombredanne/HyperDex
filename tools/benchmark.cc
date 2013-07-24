@@ -29,7 +29,12 @@
 #include <errno.h>
 
 // LevelDB
-#include <hyperleveldb/db.h>
+//#include <hyperleveldb/db.h>
+
+#include <cassert>
+
+// LMDB
+#include <lmdb.h>
 
 // po6
 #include <po6/error.h>
@@ -43,14 +48,14 @@
 #include "tools/old.common.h"
 
 static bool _hyperdex = true;
-static bool _leveldb = false;
+static bool _lmdb = false;
 
 static struct poptOption popts[] = {
     POPT_AUTOHELP
     {"hyperdex", 0, POPT_ARG_NONE, NULL, 'H',
      "benchmark HyperDex (default: yes)", NULL},
-    {"leveldb", 0, POPT_ARG_NONE, NULL, 'L',
-     "benchmark LevelDB (default: no)", NULL},
+    {"lmdb", 0, POPT_ARG_NONE, NULL, 'L',
+     "benchmark LMDB (default: no)", NULL},
     CONNECT_TABLE
     POPT_TABLEEND
 };
@@ -100,15 +105,20 @@ perform_hyperdex(void* _cl,
 }
 
 static int
-perform_leveldb(void* _db,
+perform_lmdb(void* _db,
                 const char* k, size_t k_sz,
                 const char* v, size_t v_sz)
 {
-    leveldb::WriteOptions opts;
-    leveldb::DB* db = static_cast<leveldb::DB*>(_db);
-    leveldb::Status st = db->Put(opts, leveldb::Slice(k, k_sz), leveldb::Slice(v, v_sz));
+	MDB_env *db = (MDB_env *)_db;
+	MDB_txn *txn;
+	MDB_val key, val;
+	int rc;
+	rc = mdb_txn_begin(db, NULL, 0, &txn);
+	key.mv_data = (void *)k; key.mv_size = k_sz;
+	val.mv_data = (void *)v; val.mv_size = v_sz;
+	rc = mdb_put(txn, 1, &key, &val, 0);
 
-    if (!st.ok())
+    if (rc)
     {
         return EXIT_FAILURE;
     }
@@ -230,10 +240,10 @@ main(int argc, const char* argv[])
                 break;
             case 'H':
                 _hyperdex = true;
-                _leveldb = false;
+                _lmdb = false;
                 break;
             case 'L':
-                _leveldb = true;
+                _lmdb = true;
                 _hyperdex = false;
                 break;
             case POPT_ERROR_NOARG:
@@ -266,23 +276,22 @@ main(int argc, const char* argv[])
             ptr = hyperclient_create(_connect_host, _connect_port);
         }
 
-        if (_leveldb)
+        if (_lmdb)
         {
-            func = perform_leveldb;
-            leveldb::Options opts;
-            opts.create_if_missing = true;
-            //opts.write_buffer_size = 64ULL * 1024ULL * 1024ULL;
-            //opts.filter_policy = leveldb::NewBloomFilterPolicy(10);
-            leveldb::DB* tmp_db;
-            leveldb::Status st = leveldb::DB::Open(opts, ".", &tmp_db);
+			MDB_env *tmp_env;
+			int rc;
+            func = perform_lmdb;
+			mdb_env_create(&tmp_env);
+			mdb_env_set_mapsize(tmp_env, 1048576*10);
+			rc = mdb_env_open(tmp_env, ".", MDB_WRITEMAP|MDB_NOMETASYNC, 0666);
 
-            if (!st.ok())
+            if (rc)
             {
-                std::cerr << "could not open LevelDB: " << st.ToString() << std::endl;
+                std::cerr << "could not open LMDB: " << mdb_strerror(rc) << std::endl;
                 return EXIT_FAILURE;
             }
 
-            ptr = tmp_db;
+            ptr = tmp_env;
         }
 
         assert(func);
@@ -302,9 +311,9 @@ main(int argc, const char* argv[])
             hyperclient_destroy(static_cast<hyperclient*>(ptr));
         }
 
-        if (_leveldb)
+        if (_lmdb)
         {
-            delete static_cast<leveldb::DB*>(ptr);
+			mdb_env_close((MDB_env *)ptr);
         }
 
         return EXIT_SUCCESS;
