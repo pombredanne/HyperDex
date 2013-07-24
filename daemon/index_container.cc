@@ -152,7 +152,7 @@ index_container :: index_changes(const region_id& ri,
 }
 
 datalayer::index_iterator*
-index_container :: iterator_from_check(SNAPSHOT_PTR snap,
+index_container :: iterator_from_check(dbwrap_snapshot_ptr snap,
                                        const region_id& ri,
                                        const attribute_check& c,
                                        index_info* key_ii)

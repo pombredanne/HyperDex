@@ -41,7 +41,7 @@ BEGIN_HYPERDEX_NAMESPACE
 class datalayer::iterator
 {
     public:
-        iterator(SNAPSHOT_PTR snap);
+        iterator(dbwrap_snapshot_ptr snap);
 
     public:
         virtual bool valid() = 0;
@@ -53,7 +53,7 @@ class datalayer::iterator
         virtual std::ostream& describe(std::ostream&) const = 0;
 
     public:
-        SNAPSHOT_PTR snap();
+        dbwrap_snapshot_ptr snap();
 
     protected:
         friend class e::intrusive_ptr<iterator>;
@@ -63,7 +63,7 @@ class datalayer::iterator
         size_t m_ref;
 
     private:
-        SNAPSHOT_PTR m_snap;
+        dbwrap_snapshot_ptr m_snap;
 };
 
 class datalayer::dummy_iterator : public iterator
@@ -85,7 +85,7 @@ class datalayer::dummy_iterator : public iterator
 class datalayer::region_iterator : public iterator
 {
     public:
-        region_iterator(ITER_PTR iter,
+        region_iterator(dbwrap_iterator_ptr iter,
                         const region_id& ri,
                         index_info* di);
 
@@ -104,7 +104,7 @@ class datalayer::region_iterator : public iterator
         region_iterator& operator = (const region_iterator&);
 
     private:
-        ITER_PTR m_iter;
+        dbwrap_iterator_ptr m_iter;
         region_id m_ri;
         std::vector<char> m_decoded;
         index_info* m_di;
@@ -113,7 +113,7 @@ class datalayer::region_iterator : public iterator
 class datalayer::index_iterator : public iterator
 {
     public:
-        index_iterator(SNAPSHOT_PTR snap);
+        index_iterator(dbwrap_snapshot_ptr snap);
         virtual ~index_iterator() throw ();
 
     public:
@@ -128,7 +128,7 @@ class datalayer::index_iterator : public iterator
 class datalayer::intersect_iterator : public index_iterator
 {
     public:
-        intersect_iterator(SNAPSHOT_PTR snap,
+        intersect_iterator(dbwrap_snapshot_ptr snap,
                            const std::vector<e::intrusive_ptr<index_iterator> >& iterators);
         virtual ~intersect_iterator() throw ();
 

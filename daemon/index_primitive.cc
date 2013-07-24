@@ -173,8 +173,8 @@ namespace
 {
 
 using hyperdex::index_info;
-//using hyperdex::leveldb_iterator_ptr;
-//using hyperdex::leveldb_snapshot_ptr;
+using hyperdex::dbwrap_iterator_ptr;
+using hyperdex::dbwrap_snapshot_ptr;
 using hyperdex::range;
 using hyperdex::region_id;
 
@@ -264,7 +264,7 @@ decode_entry(const DB_SLICE& in,
 class range_iterator : public datalayer::index_iterator
 {
     public:
-        range_iterator(SNAPSHOT_PTR snap,
+        range_iterator(dbwrap_snapshot_ptr snap,
                        const region_id& ri, 
                        const range& r,
                        index_primitive* val_ii,
@@ -286,7 +286,7 @@ class range_iterator : public datalayer::index_iterator
         range_iterator& operator = (const range_iterator&);
 
     private:
-        ITER_PTR m_iter;
+        dbwrap_iterator_ptr m_iter;
         region_id m_ri;
         range m_range;
         index_primitive* m_val_ii;
@@ -295,7 +295,7 @@ class range_iterator : public datalayer::index_iterator
         bool m_invalid;
 };
 
-range_iterator :: range_iterator(SNAPSHOT_PTR s,
+range_iterator :: range_iterator(dbwrap_snapshot_ptr s,
                                  const region_id& ri, 
                                  const range& r,
                                  index_primitive* val_ii,
@@ -309,10 +309,12 @@ range_iterator :: range_iterator(SNAPSHOT_PTR s,
     , m_scratch()
     , m_invalid(false)
 {
+	MDB_cursor *mc;
     DB_SLICE slice;
 	MDB_val k;
 
-	mdb_cursor_open(s, 1, &m_iter);
+	mdb_cursor_open(s.get(), 1, &mc);
+	m_iter.reset(s, mc);
 
     if (m_range.has_start)
     {
@@ -323,12 +325,11 @@ range_iterator :: range_iterator(SNAPSHOT_PTR s,
         m_val_ii->index_entry(m_ri, m_range.attr, &m_scratch, &slice);
     }
 	MVSL(k,slice);
-	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
+	mdb_cursor_get(mc, &k, NULL, MDB_SET);
 }
 
 range_iterator :: ~range_iterator() throw ()
 {
-	mdb_cursor_close(m_iter);
 }
 
 bool
@@ -336,7 +337,7 @@ range_iterator :: valid()
 {
 	MDB_val kk;
 	int rc;
-	rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+	rc = mdb_cursor_get(m_iter.get(), &kk, NULL, MDB_GET_CURRENT);
     while (!m_invalid && rc == MDB_SUCCESS)
     {
         DB_SLICE _k = DB_SLICE(kk.mv_data, kk.mv_size);
@@ -374,7 +375,7 @@ range_iterator :: valid()
         // if v > end
         if (cmp == 0 && m_range.end.size() < v.size())
         {
-            rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_NEXT);
+            rc = mdb_cursor_get(m_iter.get(), &kk, NULL, MDB_NEXT);
             continue;
         }
 
@@ -387,7 +388,7 @@ range_iterator :: valid()
 void
 range_iterator :: next()
 {
-	mdb_cursor_get(m_iter, NULL, NULL, MDB_NEXT);
+	mdb_cursor_get(m_iter.get(), NULL, NULL, MDB_NEXT);
 }
 
 uint64_t
@@ -404,10 +405,10 @@ range_iterator :: cost()
     m_val_ii->index_entry(m_ri, m_range.attr, m_range.end, &m_scratch, &upper);
     hyperdex::encode_bump(&m_scratch.front(), &m_scratch.front() + m_scratch.size());
     // create the range
-	txn = mdb_cursor_txn(m_iter);
-	dbi = mdb_cursor_dbi(m_iter);
+	txn = mdb_cursor_txn(m_iter.get());
+	dbi = mdb_cursor_dbi(m_iter.get());
 	mdb_cursor_open(txn, dbi, &mc);
-	mdb_cursor_get(m_iter, &k1, NULL, MDB_GET_CURRENT);
+	mdb_cursor_get(m_iter.get(), &k1, NULL, MDB_GET_CURRENT);
 	MVSL(k2,upper);
     // tally up the costs
 	rc = mdb_cursor_get(mc, &k1, NULL, MDB_SET_RANGE);
@@ -451,7 +452,7 @@ range_iterator :: internal_key()
     uint16_t attr;
     e::slice v;
     e::slice k;
-	mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+	mdb_cursor_get(m_iter.get(), &kk, NULL, MDB_GET_CURRENT);
 	_k = DB_SLICE((const char *)kk.mv_data, kk.mv_size);
     decode_entry(_k, m_val_ii, m_key_ii, &ri, &attr, &v, &k);
     return k;
@@ -471,13 +472,13 @@ range_iterator :: seek(const e::slice& ik)
     DB_SLICE slice;
     m_val_ii->index_entry(m_ri, m_range.attr, m_key_ii, m_range.start, ik, &m_scratch, &slice);
 	MVSL(k,slice);
-	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
+	mdb_cursor_get(m_iter.get(), &k, NULL, MDB_SET);
 }
 
 class key_iterator : public datalayer::index_iterator
 {
     public:
-        key_iterator(SNAPSHOT_PTR snap,
+        key_iterator(dbwrap_snapshot_ptr snap,
                      const region_id& ri, 
                      const range& r,
                      index_info* key_ii);
@@ -498,7 +499,7 @@ class key_iterator : public datalayer::index_iterator
         key_iterator& operator = (const key_iterator&);
 
     private:
-        ITER_PTR m_iter;
+        dbwrap_iterator_ptr m_iter;
         region_id m_ri;
         range m_range;
         index_info* m_key_ii;
@@ -506,7 +507,7 @@ class key_iterator : public datalayer::index_iterator
         bool m_invalid;
 };
 
-key_iterator :: key_iterator(SNAPSHOT_PTR s,
+key_iterator :: key_iterator(dbwrap_snapshot_ptr s,
                              const region_id& ri, 
                              const range& r,
                              index_info* key_ii)
@@ -518,12 +519,14 @@ key_iterator :: key_iterator(SNAPSHOT_PTR s,
     , m_scratch()
     , m_invalid(false)
 {
+	MDB_cursor *mc;
     assert(m_range.attr == 0);
-	mdb_cursor_open(s, 1, &m_iter);
+	mdb_cursor_open(s.get(), 1, &mc);
 
     DB_SLICE slice;
 	MDB_val k;
 
+	m_iter.reset(s, mc);
     if (m_range.has_start)
     {
         encode_key(m_ri, m_range.type, m_range.start, &m_scratch, &slice);
@@ -534,12 +537,11 @@ key_iterator :: key_iterator(SNAPSHOT_PTR s,
     }
 
 	MVSL(k,slice);
-	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
+	mdb_cursor_get(mc, &k, NULL, MDB_SET);
 }
 
 key_iterator :: ~key_iterator() throw ()
 {
-	mdb_cursor_close(m_iter);
 }
 
 bool
@@ -547,7 +549,7 @@ key_iterator :: valid()
 {
 	MDB_val kk;
 	int rc;
-	rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+	rc = mdb_cursor_get(m_iter.get(), &kk, NULL, MDB_GET_CURRENT);
     while (!m_invalid && rc == MDB_SUCCESS)
     {
         DB_SLICE _k = DB_SLICE((const char *)kk.mv_data, kk.mv_size);
@@ -578,7 +580,7 @@ key_iterator :: valid()
         // if k > end
         if (cmp == 0 && m_range.end.size() < k.size())
         {
-            rc = mdb_cursor_get(m_iter, &kk, NULL, MDB_NEXT);
+            rc = mdb_cursor_get(m_iter.get(), &kk, NULL, MDB_NEXT);
             continue;
         }
 
@@ -591,7 +593,7 @@ key_iterator :: valid()
 void
 key_iterator :: next()
 {
-	mdb_cursor_get(m_iter, NULL, NULL, MDB_NEXT);
+	mdb_cursor_get(m_iter.get(), NULL, NULL, MDB_NEXT);
 }
 
 uint64_t
@@ -608,10 +610,10 @@ key_iterator :: cost()
     encode_key(m_ri, m_range.type, m_range.end, &m_scratch, &upper);
     hyperdex::encode_bump(&m_scratch.front(), &m_scratch.front() + m_scratch.size());
     // create the range
-	txn = mdb_cursor_txn(m_iter);
-	dbi = mdb_cursor_dbi(m_iter);
+	txn = mdb_cursor_txn(m_iter.get());
+	dbi = mdb_cursor_dbi(m_iter.get());
 	mdb_cursor_open(txn, dbi, &mc);
-	mdb_cursor_get(m_iter, &k1, NULL, MDB_GET_CURRENT);
+	mdb_cursor_get(m_iter.get(), &k1, NULL, MDB_GET_CURRENT);
 	MVSL(k2,upper);
     // tally up the costs
 	rc = mdb_cursor_get(mc, &k1, NULL, MDB_SET_RANGE);
@@ -652,7 +654,7 @@ key_iterator :: internal_key()
     region_id ri;
     e::slice k;
 	MDB_val kk;
-	mdb_cursor_get(m_iter, &kk, NULL, MDB_GET_CURRENT);
+	mdb_cursor_get(m_iter.get(), &kk, NULL, MDB_GET_CURRENT);
     DB_SLICE _k = DB_SLICE((const char *)kk.mv_data, kk.mv_size);
     decode_key(_k, &ri, &k);
     return k;
@@ -671,13 +673,13 @@ key_iterator :: seek(const e::slice& ik)
 	MDB_val k;
     encode_key(m_ri, m_range.type, ik, &m_scratch, &slice);
 	MVSL(k,slice);
-	mdb_cursor_get(m_iter, &k, NULL, MDB_SET);
+	mdb_cursor_get(m_iter.get(), &k, NULL, MDB_SET);
 }
 
 } // namespace
 
 datalayer::index_iterator*
-index_primitive :: iterator_from_range(SNAPSHOT_PTR snap,
+index_primitive :: iterator_from_range(dbwrap_snapshot_ptr snap,
                                        const region_id& ri, 
                                        const range& r,
                                        index_info* key_ii)

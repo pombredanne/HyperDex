@@ -91,25 +91,27 @@ datalayer :: setup(const po6::pathname& path,
 				   unsigned maxsize)
 {
 	size_t msize = (size_t)maxsize * 1024ULL * 1024ULL;
+	MDB_env *tmp_db;
 	MDB_txn *txn;
 	MDB_val key, val;
 	int rc;
 	bool ret = false;
 
-	rc = mdb_env_create(&m_db);
+	rc = mdb_env_create(&tmp_db);
 	if (rc)
 	{
         LOG(ERROR) << "could not create LMDB env: " << mdb_strerror(rc);
         return false;
 	}
-	rc = mdb_env_set_mapsize(m_db, msize);
-	rc = mdb_env_open(m_db, path.get(), MDB_WRITEMAP|MDB_NOMETASYNC, 0600);
+	m_db.reset(tmp_db, mdb_env_close);
+	rc = mdb_env_set_mapsize(tmp_db, msize);
+	rc = mdb_env_open(tmp_db, path.get(), MDB_WRITEMAP|MDB_NOMETASYNC, 0600);
 	if (rc)
 	{
         LOG(ERROR) << "could not open LMDB env: " << mdb_strerror(rc);
         return false;
 	}
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	rc = mdb_txn_begin(tmp_db, NULL, 0, &txn);
 	if (rc)
 	{
         LOG(ERROR) << "could not open LMDB txn: " << mdb_strerror(rc);
@@ -235,7 +237,7 @@ datalayer :: initialize()
 	MVS(key, "hyperdex");
 	MVS(val, PACKAGE_VERSION);
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &txn);
 	if (rc)
 	{
 		LOG(ERROR) << "could not open txn: " << mdb_strerror(rc);
@@ -267,7 +269,7 @@ datalayer :: save_state(const server_id& us,
 	MVS(key, "dirty");
 	MVS(val, "");
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &txn);
 	if (rc)
 	{
 		LOG(ERROR) << "could not open txn: " << mdb_strerror(rc);
@@ -314,7 +316,7 @@ datalayer :: clear_dirty()
 
 	MVS(key, "dirty");
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &txn);
 	if (rc)
 	{
 		LOG(ERROR) << "could not open txn: " << mdb_strerror(rc);
@@ -402,7 +404,7 @@ datalayer :: approximate_size()
 {
     uint64_t ret;
 	MDB_stat st;
-	mdb_env_stat(m_db, &st);
+	mdb_env_stat(m_db.get(), &st);
 	ret = (st.ms_branch_pages + st.ms_leaf_pages + st.ms_overflow_pages) * st.ms_psize;
 
     return ret;
@@ -425,7 +427,7 @@ datalayer :: get(const region_id& ri,
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
     // perform the read
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ref->m_rtxn);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &ref->m_rtxn);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -464,7 +466,7 @@ datalayer :: del(const region_id& ri,
     DB_SLICE lkey;
     encode_key(ri, sc.attrs[0].type, key, &scratch, &lkey);
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &updates);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &updates);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -550,7 +552,7 @@ datalayer :: put(const region_id& ri,
     std::vector<char> scratch2;
 	int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &updates);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &updates);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -644,7 +646,7 @@ datalayer :: overput(const region_id& ri,
     std::vector<char> scratch2;
 	int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &updates);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &updates);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -732,7 +734,7 @@ datalayer :: uncertain_del(const region_id& ri,
     std::vector<char> scratch;
 	int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &txn);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -792,7 +794,7 @@ datalayer :: uncertain_put(const region_id& ri,
 	MDB_val k, val;
 	int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &txn);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -855,7 +857,7 @@ datalayer :: get_transfer(const region_id& ri,
     capture_id cid = m_daemon->m_config.capture_for(ri);
     assert(cid != capture_id());
 	MVBF(k,tbacking);
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ref->m_rtxn);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &ref->m_rtxn);
 	if (rc)
 	{
 		return handle_error(rc);
@@ -892,7 +894,7 @@ datalayer :: check_acked(const region_id& ri,
     encode_acked(ri, reg_id, seq_id, abacking);
 	MVBF(k,abacking);
 
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &txn);
 	if (rc)
 	{
 		return false;
@@ -930,7 +932,7 @@ datalayer :: mark_acked(const region_id& ri,
 	MVBF(k,abacking);
 	MVS(val, "");
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &txn);
 	if (rc)
 	{
 		return;
@@ -967,7 +969,7 @@ datalayer :: max_seq_id(const region_id& reg_id,
     char abacking[ACKED_BUF_SIZE];
 	int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &txn);
 	if (rc)
 	{
 		return;
@@ -1016,7 +1018,7 @@ datalayer :: clear_acked(const region_id& reg_id,
 	int rc;
     char abacking[ACKED_BUF_SIZE];
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+	rc = mdb_txn_begin(m_db.get(), NULL, 0, &txn);
 	if (rc)
 	{
 		return;
@@ -1086,12 +1088,12 @@ datalayer :: make_snapshot()
 {
 	int rc;
 	MDB_txn *ret = NULL;
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &ret);
+	rc = mdb_txn_begin(m_db.get(), NULL, MDB_RDONLY, &ret);
 	if (rc)
 	{
 		LOG(ERROR) << "DB error: could not make rdonly txn: " << mdb_strerror(rc);
 	}
-    return ret;
+    return dbwrap_snapshot_ptr(m_db, ret);
 }
 
 datalayer::iterator*
@@ -1099,7 +1101,8 @@ datalayer :: make_region_iterator(snapshot snap,
                                   const region_id& ri,
                                   returncode* error)
 {
-	MDB_cursor *iter = NULL;
+	MDB_cursor *mc = NULL;
+	dbwrap_iterator_ptr iter;
     *error = datalayer::SUCCESS;
     const size_t backing_sz = sizeof(uint8_t) + sizeof(uint64_t);
     char backing[backing_sz];
@@ -1107,7 +1110,8 @@ datalayer :: make_region_iterator(snapshot snap,
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
 
-	mdb_cursor_open(snap, m_dbi, &iter);
+	mdb_cursor_open(snap.get(), m_dbi, &mc);
+	iter.reset(snap, mc);
     const schema& sc(*m_daemon->m_config.get_schema(ri));
     return new region_iterator(iter, ri, index_info::lookup(sc.attrs[0].type));
 }
@@ -1268,7 +1272,7 @@ datalayer :: get_from_iterator(const region_id& ri,
 
     // perform the read
 	MVSL(k,lkey);
-	rc = mdb_get(iter->snap(), m_dbi, &k, &val);
+	rc = mdb_get(iter->snap().get(), m_dbi, &k, &val);
 
     if (rc == MDB_SUCCESS)
     {
@@ -1345,7 +1349,7 @@ datalayer :: cleaner()
 		MDB_val k;
 		int rc;
 
-		rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+		rc = mdb_txn_begin(m_db.get(), NULL, 0, &txn);
 		rc = mdb_cursor_open(txn, m_dbi, &mc);
 		MVS(k, "t");
 		rc = mdb_cursor_get(mc, &k, NULL, MDB_SET_RANGE);

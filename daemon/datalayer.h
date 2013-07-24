@@ -55,19 +55,13 @@
 #include "common/datatypes.h"
 #include "common/ids.h"
 #include "common/schema.h"
-//#include "daemon/leveldb.h"
+#include "daemon/dbwrap.h"
 #include "daemon/reconfigure_returncode.h"
 
 #if 0
-#define	SNAPSHOT_PTR	leveldb_snapshot_ptr
-#define	DB_PTR	leveldb::DB*
-#define ITER_PTR	leveldb_iterator_ptr
 #define	DB_SLICE	leveldb::Slice
 #define DB_WBATCH	leveldb::WriteBatch
 #else
-#define SNAPSHOT_PTR	MDB_txn*
-#define DB_PTR	MDB_env*
-#define ITER_PTR	MDB_cursor*
 #define	DB_SLICE	e::slice
 #define DB_WBATCH	MDB_txn*
 #endif
@@ -110,7 +104,7 @@ class datalayer
         class sorted_iterator;
         class unsorted_iterator;
         class intersect_iterator;
-        typedef SNAPSHOT_PTR snapshot;
+        typedef dbwrap_snapshot_ptr snapshot;
 
     public:
         datalayer(daemon*);
@@ -231,7 +225,7 @@ class datalayer
 
     private:
         daemon* m_daemon;
-        MDB_env *m_db;
+        dbwrap_db_ptr m_db;
 		MDB_dbi m_dbi;
         counter_map m_counters;
         po6::threads::thread m_cleaner;

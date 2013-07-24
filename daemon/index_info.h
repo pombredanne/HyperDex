@@ -84,13 +84,13 @@ class index_info
                                    DB_WBATCH updates) = 0;
         // return an iterator that retrieves at least the keys matching r
         // if not indexable (full scan), return NULL
-        virtual datalayer::index_iterator* iterator_from_range(SNAPSHOT_PTR snap,
+        virtual datalayer::index_iterator* iterator_from_range(dbwrap_snapshot_ptr snap,
                                                                const region_id& ri,
                                                                const range& r,
                                                                index_info* key_ii);
         // return an iterator that retrieves at least the keys that pass c
         // if not indexable (full scan), return NULL
-        virtual datalayer::index_iterator* iterator_from_check(SNAPSHOT_PTR snap,
+        virtual datalayer::index_iterator* iterator_from_check(dbwrap_snapshot_ptr snap,
                                                                const region_id& ri,
                                                                const attribute_check& c,
                                                                index_info* key_ii);

@@ -36,7 +36,7 @@
 #include "daemon/datalayer_iterator.h"
 
 using hyperdex::datalayer;
-//using hyperdex::leveldb_snapshot_ptr;
+using hyperdex::dbwrap_snapshot_ptr;;
 
 namespace
 {
@@ -68,13 +68,13 @@ internal_key_compare(const e::slice& lhs, const e::slice& rhs)
 
 //////////////////////////////// class iterator ////////////////////////////////
 
-datalayer :: iterator :: iterator(SNAPSHOT_PTR s)
+datalayer :: iterator :: iterator(dbwrap_snapshot_ptr s)
     : m_ref(0)
     , m_snap(s)
 {
 }
 
-SNAPSHOT_PTR
+dbwrap_snapshot_ptr
 datalayer :: iterator :: snap()
 {
     return m_snap;
@@ -87,7 +87,7 @@ datalayer :: iterator :: ~iterator() throw ()
 ///////////////////////////// class dummy_iterator /////////////////////////////
 
 datalayer :: dummy_iterator :: dummy_iterator()
-    : iterator(NULL)
+    : iterator(dbwrap_snapshot_ptr())
 {
 }
 
@@ -126,10 +126,10 @@ datalayer :: dummy_iterator :: ~dummy_iterator() throw ()
 
 ///////////////////////////// class region_iterator ////////////////////////////
 
-datalayer :: region_iterator :: region_iterator(ITER_PTR iter,
+datalayer :: region_iterator :: region_iterator(dbwrap_iterator_ptr iter,
                                                 const region_id& ri,
                                                 index_info* di)
-    : iterator(mdb_cursor_txn(iter))
+    : iterator(iter.snap())
     , m_iter(iter)
     , m_ri(ri)
     , m_decoded()
@@ -140,13 +140,11 @@ datalayer :: region_iterator :: region_iterator(ITER_PTR iter,
 	MDB_val k = {sizeof(buf), buf};
     ptr = e::pack8be('o', ptr);
     ptr = e::pack64be(ri.get(), ptr);
-	mdb_cursor_get(iter, &k, NULL, MDB_SET_RANGE);
+	mdb_cursor_get(iter.get(), &k, NULL, MDB_SET_RANGE);
 }
 
 datalayer :: region_iterator :: ~region_iterator() throw ()
 {
-	MDB_txn *txn = mdb_cursor_txn(m_iter);
-	mdb_cursor_close(m_iter);
 }
 
 std::ostream&
@@ -161,7 +159,7 @@ datalayer :: region_iterator :: valid()
 	MDB_val k;
 	int rc;
 	
-	rc = mdb_cursor_get(m_iter, &k, NULL, MDB_GET_CURRENT);
+	rc = mdb_cursor_get(m_iter.get(), &k, NULL, MDB_GET_CURRENT);
 	if (rc)
     {
         return false;
@@ -185,7 +183,7 @@ datalayer :: region_iterator :: valid()
 void
 datalayer :: region_iterator :: next()
 {
-	mdb_cursor_get(m_iter, NULL, NULL, MDB_NEXT);
+	mdb_cursor_get(m_iter.get(), NULL, NULL, MDB_NEXT);
 }
 
 uint64_t
@@ -210,8 +208,8 @@ datalayer :: region_iterator :: cost()
 	k1.mv_size = sz;
 	k2.mv_data = buf + sz;
 	k2.mv_size = sz;
-	txn = mdb_cursor_txn(m_iter);
-	dbi = mdb_cursor_dbi(m_iter);
+	txn = mdb_cursor_txn(m_iter.get());
+	dbi = mdb_cursor_dbi(m_iter.get());
 	// tally up the sizes of all the keys in [k1,k2)
 	rc = mdb_cursor_open(txn, dbi, &mc);
 	rc = mdb_cursor_get(mc, &k1, NULL, MDB_SET_RANGE);
@@ -230,7 +228,7 @@ datalayer :: region_iterator :: key()
 {
     const size_t sz = sizeof(uint8_t) + sizeof(uint64_t);
 	MDB_val _k;
-	mdb_cursor_get(m_iter, &_k, NULL, MDB_GET_CURRENT);
+	mdb_cursor_get(m_iter.get(), &_k, NULL, MDB_GET_CURRENT);
     e::slice k = e::slice((const char *)_k.mv_data + sz, _k.mv_size - sz);
     size_t decoded_sz = m_di->decoded_size(k);
 
@@ -245,7 +243,7 @@ datalayer :: region_iterator :: key()
 
 ///////////////////////////// class index_iterator /////////////////////////////
 
-datalayer :: index_iterator :: index_iterator(SNAPSHOT_PTR s)
+datalayer :: index_iterator :: index_iterator(dbwrap_snapshot_ptr s)
     : iterator(s)
 {
 }
@@ -256,7 +254,7 @@ datalayer :: index_iterator :: ~index_iterator() throw ()
 
 //////////////////////////// class intersect_iterator ////////////////////////////
 
-datalayer :: intersect_iterator :: intersect_iterator(SNAPSHOT_PTR s,
+datalayer :: intersect_iterator :: intersect_iterator(dbwrap_snapshot_ptr s,
                                                       const std::vector<e::intrusive_ptr<index_iterator> >& iterators)
     : index_iterator(s)
     , m_iters(iterators)
@@ -408,7 +406,6 @@ datalayer :: search_iterator :: search_iterator(datalayer* dl,
 
 datalayer :: search_iterator :: ~search_iterator() throw ()
 {
-	mdb_txn_abort(m_iter->snap());
 }
 
 std::ostream&
@@ -444,7 +441,7 @@ datalayer :: search_iterator :: valid()
         encode_key(m_ri, sc.attrs[0].type, m_iter->key(), &kbacking, &lkey);
 		MVSL(k,lkey);
 
-		txn = m_iter->snap();
+		txn = m_iter->snap().get();
 		rc = mdb_get(txn, 1, &k, &val);
 
         if (rc == MDB_SUCCESS)
