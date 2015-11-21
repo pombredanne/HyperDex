@@ -30,7 +30,7 @@
 
 // HyperDex
 #include "namespace.h"
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
 #include "daemon/index_container.h"
 
 BEGIN_HYPERDEX_NAMESPACE
@@ -42,10 +42,11 @@ class index_set : public index_container
         virtual ~index_set() throw ();
 
     private:
+        virtual hyperdatatype datatype() const;
         virtual void extract_elements(const e::slice& container,
-                                      std::vector<e::slice>* elems);
-        virtual datatype_info* element_datatype_info();
-        virtual index_info* element_index_info();
+                                      std::vector<e::slice>* elems) const;
+        virtual const datatype_info* element_datatype_info() const;
+        virtual const index_info* element_index_info() const;
 
     private:
         hyperdatatype m_datatype;

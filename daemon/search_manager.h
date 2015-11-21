@@ -51,6 +51,8 @@ class search_manager
     public:
         bool setup();
         void teardown();
+        void pause();
+        void unpause();
         void reconfigure(const configuration& old_config,
                          const configuration& new_config,
                          const server_id& us);
@@ -76,6 +78,10 @@ class search_manager
                            uint64_t limit,
                            uint16_t sort_by,
                            bool maximize);
+
+        // Find keys that match the check and forward ops to the corresponding servers
+        // Essentially this splits out the group operation in several seperate operations
+        // (by acting like it was a client)
         void group_keyop(const server_id& from,
                          const virtual_server_id& to,
                          uint64_t nonce,
@@ -83,10 +89,13 @@ class search_manager
                          network_msgtype mt,
                          const e::slice& remain,
                          network_msgtype resp);
+
+        // Calculate the amount of entries that match the checks
         void count(const server_id& from,
                    const virtual_server_id& to,
                    uint64_t nonce,
                    std::vector<attribute_check>* checks);
+
         void search_describe(const server_id& from,
                              const virtual_server_id& to,
                              uint64_t nonce,

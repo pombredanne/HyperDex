@@ -30,6 +30,7 @@
 
 // e
 #include <e/slice.h>
+#include <e/serialization.h>
 
 // HyperDex
 #include "namespace.h"
@@ -52,27 +53,35 @@ class attribute_check
 };
 
 bool
-validate_attribute_check(const schema& sc,
-                         const attribute_check& chk);
+validate_attribute_check(hyperdatatype type,
+                         const attribute_check& check);
 
 size_t
 validate_attribute_checks(const schema& sc,
                           const std::vector<hyperdex::attribute_check>& checks);
-
 bool
-passes_attribute_check(const schema& sc,
+passes_attribute_check(hyperdatatype type,
                        const attribute_check& chk,
                        const e::slice& value);
 
+// Does several calls of passes_attribute_check at once
+// Returns point of failure in the vector or checks.size() on success
 size_t
 passes_attribute_checks(const schema& sc,
                         const std::vector<hyperdex::attribute_check>& checks,
                         const e::slice& key,
-                        const std::vector<e::slice>& value);
+                        const std::vector<e::slice>& values);
 
 bool
 operator < (const attribute_check& lhs,
             const attribute_check& rhs);
+
+e::packer
+operator << (e::packer lhs, const attribute_check& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, attribute_check& rhs);
+size_t
+pack_size(const attribute_check& rhs);
 
 END_HYPERDEX_NAMESPACE
 

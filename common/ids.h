@@ -36,6 +36,7 @@
 
 // e
 #include <e/buffer.h>
+#include <e/serialization.h>
 
 // HyperDex
 #include "namespace.h"
@@ -53,6 +54,7 @@
     class TYPE ## _id \
     { \
         public: \
+            static uint64_t hash(const TYPE ## _id& x) { return x.get(); } \
             TYPE ## _id() : m_id(0) {} \
             explicit TYPE ## _id(uint64_t id) : m_id(id) {} \
         public: \
@@ -60,24 +62,17 @@
         private: \
             uint64_t m_id; \
     }; \
-    inline std::ostream& \
-    operator << (std::ostream& lhs, const TYPE ## _id& rhs) \
+    std::ostream& \
+    operator << (std::ostream& lhs, const TYPE ## _id& rhs); \
+    inline size_t \
+    pack_size(const TYPE ## _id&) \
     { \
-        return lhs << #TYPE "(" << rhs.get() << ")"; \
+        return sizeof(uint64_t); \
     } \
-    inline e::buffer::packer \
-    operator << (e::buffer::packer pa, const TYPE ## _id& rhs) \
-    { \
-        return pa << rhs.get(); \
-    } \
-    inline e::unpacker \
-    operator >> (e::unpacker up, TYPE ## _id& rhs) \
-    { \
-        uint64_t id; \
-        up = up >> id; \
-        rhs = TYPE ## _id(id); \
-        return up; \
-    } \
+    e::packer \
+    operator << (e::packer pa, const TYPE ## _id& rhs); \
+    e::unpacker \
+    operator >> (e::unpacker up, TYPE ## _id& rhs); \
     OPERATOR(TYPE, <) \
     OPERATOR(TYPE, <=) \
     OPERATOR(TYPE, ==) \
@@ -87,8 +82,9 @@
 
 BEGIN_HYPERDEX_NAMESPACE
 
-CREATE_ID(capture)
+CREATE_ID(index)
 CREATE_ID(region)
+CREATE_ID(replica_set)
 CREATE_ID(server)
 CREATE_ID(space)
 CREATE_ID(subspace)

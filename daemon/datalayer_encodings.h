@@ -38,10 +38,22 @@
 
 BEGIN_HYPERDEX_NAMESPACE
 
+size_t
+object_prefix_sz(region_id ri);
+
+char*
+encode_object_prefix(region_id ri, char* ptr);
+
 void
 encode_object_region(const region_id& ri,
                      std::vector<char>* scratch,
                      leveldb::Slice* out);
+
+void
+encode_key(const region_id& ri,
+           const e::slice& internal_key,
+           std::vector<char>* scratch,
+           leveldb::Slice* out);
 
 void
 encode_key(const region_id& ri,
@@ -66,42 +78,31 @@ decode_value(const e::slice& in,
              uint64_t* version);
 
 // Encode the record of an operation for which we have sent an ACK
-#define ACKED_BUF_SIZE (sizeof(uint8_t) + 3 * sizeof(uint64_t))
+#define VERSION_BUF_SIZE (sizeof(uint8_t) + 2 * sizeof(uint64_t))
 void
-encode_acked(const region_id& ri, /*region we saw an ack for*/
-             const region_id& reg_id, /*region of the point leader*/
-             uint64_t seq_id,
-             char* out);
+encode_version(const region_id& ri, /*region we wrote*/
+               uint64_t version,
+               char* out);
 datalayer::returncode
-decode_acked(const e::slice& in,
-             region_id* ri, /*region we saw an ack for*/
-             region_id* reg_id, /*region of the point leader*/
-             uint64_t* seq_id);
+decode_version(const e::slice& in,
+               region_id* ri, /*region we saw an ack for*/
+               uint64_t* version);
 
-// Encode the transfer
-#define TRANSFER_BUF_SIZE (sizeof(uint8_t) + 2 * sizeof(uint64_t))
+// checkpoints
+#define CHECKPOINT_BUF_SIZE (sizeof(uint8_t) + 2 * sizeof(uint64_t))
 void
-encode_transfer(const capture_id& ci,
-                uint64_t count,
-                char* out);
-void
-encode_key_value(const e::slice& key,
-                 /*pointer to make it optional*/
-                 const std::vector<e::slice>* value,
-                 uint64_t version,
-                 std::vector<char>* backing, /*XXX*/
-                 leveldb::Slice* out);
+encode_checkpoint(const region_id& ri,
+                  uint64_t checkpoint,
+                  char* out);
 datalayer::returncode
-decode_key_value(const e::slice& in,
-                 bool* has_value,
-                 e::slice* key,
-                 std::vector<e::slice>* value,
-                 uint64_t* version);
+decode_checkpoint(const e::slice& in,
+                  region_id* ri,
+                  uint64_t* checkpoint);
 
 void
 create_index_changes(const schema& sc,
-                     const subspace& sub,
                      const region_id& ri,
+                     const std::vector<const index*>& indices,
                      const e::slice& key,
                      const std::vector<e::slice>* old_value,
                      const std::vector<e::slice>* new_value,

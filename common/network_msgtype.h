@@ -41,6 +41,9 @@ enum network_msgtype
     REQ_GET         = 8,
     RESP_GET        = 9,
 
+    REQ_GET_PARTIAL = 10,
+    RESP_GET_PARTIAL = 11,
+
     REQ_ATOMIC      = 16,
     RESP_ATOMIC     = 17,
 
@@ -53,8 +56,7 @@ enum network_msgtype
     REQ_SORTED_SEARCH   = 40,
     RESP_SORTED_SEARCH  = 41,
 
-    REQ_GROUP_DEL   = 48,
-    RESP_GROUP_DEL  = 49,
+    /* 48, 49 retired */
 
     REQ_COUNT       = 50,
     RESP_COUNT      = 51,
@@ -62,14 +64,22 @@ enum network_msgtype
     REQ_SEARCH_DESCRIBE  = 52,
     RESP_SEARCH_DESCRIBE = 53,
 
+    REQ_GROUP_ATOMIC = 54,
+    RESP_GROUP_ATOMIC = 55,
+
     CHAIN_OP        = 64,
     CHAIN_SUBSPACE  = 65,
     CHAIN_ACK       = 66,
-    CHAIN_GC        = 67,
+    /* 67 retired */
 
     XFER_OP  = 80,
     XFER_ACK = 81,
+    XFER_HS  = 82, // handshake syn
+    XFER_HSA = 83, // handshake syn-ack
+    XFER_HA  = 84, // handshake ack
+    XFER_HW  = 85, // wiped
 
+    BACKUP = 126,
     PERF_COUNTERS = 127,
 
     CONFIGMISMATCH  = 254,

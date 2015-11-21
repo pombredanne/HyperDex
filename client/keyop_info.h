@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Cornell University
+// Copyright (c) 2014, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -35,16 +35,17 @@
 #include "hyperdex.h"
 #include "common/funcall.h"
 
-struct hyperclient_keyop_info
+// This corresponds to the values given in keyop_info.gperf
+struct hyperdex_client_keyop_info
 {
-    int name;
+    int name; // hash of the function name
     bool erase;
     bool fail_if_not_found;
     bool fail_if_found;
     hyperdex::funcall_t fname;
 };
 
-const struct hyperclient_keyop_info*
-hyperclient_keyop_info_lookup(const char* str, unsigned int len);
+const struct hyperdex_client_keyop_info*
+hyperdex_client_keyop_info_lookup(const char* str, unsigned int len);
 
 #endif // hyperdex_client_keyop_info_h_

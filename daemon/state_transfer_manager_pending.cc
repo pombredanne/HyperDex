@@ -25,6 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
 // HyperDex
 #include "daemon/state_transfer_manager_pending.h"
 
@@ -38,7 +40,8 @@ state_transfer_manager :: state_transfer_manager :: pending :: pending()
     , value()
     , acked(false)
     , msg()
-    , ref()
+    , kref()
+    , vref()
     , m_ref(0)
 {
 }

@@ -66,6 +66,33 @@ class datalayer::iterator
         leveldb_snapshot_ptr m_snap;
 };
 
+class datalayer::replay_iterator
+{
+    public:
+        replay_iterator(const region_id& ri, leveldb_replay_iterator_ptr ptr, const index_encoding* ie);
+
+    public:
+        bool valid();
+        void next();
+        bool has_value();
+        e::slice key();
+        returncode unpack_value(std::vector<e::slice>* value,
+                                uint64_t* version,
+                                reference* ref);
+        leveldb::Status status();
+
+    private:
+        region_id m_ri;
+        leveldb::ReplayIterator* m_iter;
+        leveldb_replay_iterator_ptr m_ptr;
+        std::vector<char> m_decoded;
+        const index_encoding *const m_ie;
+
+    private:
+        replay_iterator(const replay_iterator&);
+        replay_iterator& operator = (const replay_iterator&);
+};
+
 class datalayer::dummy_iterator : public iterator
 {
     public:
@@ -87,7 +114,8 @@ class datalayer::region_iterator : public iterator
     public:
         region_iterator(leveldb_iterator_ptr iter,
                         const region_id& ri,
-                        index_info* di);
+                        const index_encoding* ie);
+        virtual ~region_iterator() throw ();
 
     public:
         virtual bool valid();
@@ -95,9 +123,6 @@ class datalayer::region_iterator : public iterator
         virtual uint64_t cost(leveldb::DB*);
         virtual e::slice key();
         virtual std::ostream& describe(std::ostream&) const;
-
-    protected:
-        virtual ~region_iterator() throw ();
 
     private:
         region_iterator(const region_iterator&);
@@ -107,7 +132,7 @@ class datalayer::region_iterator : public iterator
         leveldb_iterator_ptr m_iter;
         region_id m_ri;
         std::vector<char> m_decoded;
-        index_info* m_di;
+        const index_encoding *const m_ie;
 };
 
 class datalayer::index_iterator : public iterator
@@ -123,6 +148,57 @@ class datalayer::index_iterator : public iterator
 
     protected:
         friend class e::intrusive_ptr<index_iterator>;
+};
+
+class datalayer::range_index_iterator : public index_iterator
+{
+    public:
+        range_index_iterator(leveldb_snapshot_ptr snap,
+                             size_t range_prefix_sz,
+                             const e::slice& range_lower,
+                             const e::slice& range_upper,
+                             bool has_value_lower,
+                             bool has_value_upper,
+                             const index_encoding* val_ie,
+                             const index_encoding* key_ie);
+        virtual ~range_index_iterator() throw ();
+
+    public:
+        virtual bool valid();
+        virtual void next();
+        virtual uint64_t cost(leveldb::DB*);
+        virtual e::slice key();
+        virtual std::ostream& describe(std::ostream&) const;
+        virtual e::slice internal_key();
+        virtual bool sorted();
+        virtual void seek(const e::slice& internal_key);
+
+    private:
+        bool decode_entry(const e::slice& in, e::slice* val, e::slice* key);
+        bool decode_entry_keyless(const e::slice& in, e::slice* val);
+        void encode_entry(const e::slice& val,
+                          const e::slice& key,
+                          std::vector<char>* scratch,
+                          e::slice* slice);
+
+    private:
+        range_index_iterator(const range_index_iterator&);
+        range_index_iterator& operator = (const range_index_iterator&);
+
+    private:
+        leveldb_iterator_ptr m_iter;
+        const index_encoding *const m_val_ie;
+        const index_encoding *const m_key_ie;
+        e::slice m_prefix;
+        e::slice m_range_lower;
+        e::slice m_range_upper;
+        e::slice m_value_lower;
+        e::slice m_value_upper;
+        std::vector<char> m_range_buf;
+        std::vector<char> m_scratch;
+        bool m_has_lower;
+        bool m_has_upper;
+        bool m_invalid;
 };
 
 class datalayer::intersect_iterator : public index_iterator

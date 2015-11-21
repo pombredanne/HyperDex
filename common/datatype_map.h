@@ -36,7 +36,7 @@
 
 // HyperDex
 #include "namespace.h"
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
 
 BEGIN_HYPERDEX_NAMESPACE
 
@@ -47,22 +47,25 @@ class datatype_map : public datatype_info
         virtual ~datatype_map() throw ();
 
     public:
-        virtual hyperdatatype datatype();
-        virtual bool validate(const e::slice& value);
-        virtual bool check_args(const funcall& func);
-        virtual uint8_t* apply(const e::slice& old_value,
-                               const funcall* funcs, size_t funcs_sz,
-                               uint8_t* writeto);
+        virtual hyperdatatype datatype() const;
+        virtual bool validate(const e::slice& value) const;
+        virtual bool check_args(const funcall& func) const;
+        virtual bool apply(const e::slice& old_value,
+                           const funcall* funcs, size_t funcs_sz,
+                           e::arena* new_memory,
+                           e::slice* new_value) const;
 
     public:
-        virtual bool indexable();
+        virtual bool indexable() const;
 
     public:
-        virtual bool has_length();
-        virtual uint64_t length(const e::slice& value);
-        virtual bool has_contains();
-        virtual hyperdatatype contains_datatype();
-        virtual bool contains(const e::slice& value, const e::slice& needle);
+        virtual bool has_length() const;
+        virtual uint64_t length(const e::slice& value) const;
+
+    public:
+        virtual bool has_contains() const;
+        virtual hyperdatatype contains_datatype() const;
+        virtual bool contains(const e::slice& value, const e::slice& needle) const;
 
     private:
         typedef std::map<e::slice, e::slice, datatype_info::compares_less> map_t;
@@ -73,11 +76,13 @@ class datatype_map : public datatype_info
 
     private:
         bool apply_inner(map_t* m,
-                         e::array_ptr<uint8_t>* scratch,
-                         const funcall* func); // XXX don't fail?
+                         const funcall* func,
+                         e::arena* new_memory) const;
 
     private:
+        // Datatype of the keys
         datatype_info* m_k;
+        // Datatype of the values
         datatype_info* m_v;
 };
 

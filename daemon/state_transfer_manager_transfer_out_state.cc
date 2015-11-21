@@ -25,6 +25,11 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
+// Google Log
+#include <glog/logging.h>
+
 // HyperDex
 #include "daemon/datalayer_iterator.h"
 #include "daemon/state_transfer_manager_pending.h"
@@ -32,24 +37,32 @@
 
 using hyperdex::state_transfer_manager;
 
-state_transfer_manager :: transfer_out_state :: transfer_out_state(const transfer& _xfer,
-                                                                   datalayer* data,
-                                                                   datalayer::snapshot snap)
+state_transfer_manager :: transfer_out_state :: transfer_out_state(const transfer& _xfer)
     : xfer(_xfer)
     , mtx()
-    , state(SNAPSHOT_TRANSFER)
     , next_seq_no(1)
     , window()
     , window_sz(1)
     , iter()
-    , log_seq_no(1)
+    , handshake_syn(false)
+    , handshake_ack(false)
+    , wipe(false)
     , m_ref(0)
 {
-    datalayer::returncode rc;
-    iter = data->make_region_iterator(snap, xfer.rid, &rc);
-    assert(rc == datalayer::SUCCESS);
 }
 
 state_transfer_manager :: transfer_out_state :: ~transfer_out_state() throw ()
 {
+}
+
+void
+state_transfer_manager :: transfer_out_state :: debug_dump()
+{
+    po6::threads::mutex::hold hold(&mtx);
+    LOG(INFO) << "  transfer=" << xfer;
+    LOG(INFO) << "    next_seq_no=" << next_seq_no;
+    LOG(INFO) << "    window_sz=" << window_sz;
+    LOG(INFO) << "    handshake_syn=" << handshake_syn;
+    LOG(INFO) << "    handshake_ack=" << handshake_ack;
+    LOG(INFO) << "    wipe=" << wipe;
 }

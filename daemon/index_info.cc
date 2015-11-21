@@ -26,38 +26,112 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // HyperDex
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
+#include "daemon/index_document.h"
 #include "daemon/index_float.h"
 #include "daemon/index_info.h"
 #include "daemon/index_int64.h"
 #include "daemon/index_list.h"
+#include "daemon/index_timestamp.h"
 #include "daemon/index_map.h"
 #include "daemon/index_set.h"
 #include "daemon/index_string.h"
 
 using hyperdex::datalayer;
+using hyperdex::index_encoding;
 using hyperdex::index_info;
 
-static hyperdex::index_string i_string;
-static hyperdex::index_int64 i_int64;
-static hyperdex::index_float i_float;
-static hyperdex::index_list i_list_string(HYPERDATATYPE_STRING);
-static hyperdex::index_list i_list_int64(HYPERDATATYPE_INT64);
-static hyperdex::index_list i_list_float(HYPERDATATYPE_FLOAT);
-static hyperdex::index_set i_set_string(HYPERDATATYPE_STRING);
-static hyperdex::index_set i_set_int64(HYPERDATATYPE_INT64);
-static hyperdex::index_set i_set_float(HYPERDATATYPE_FLOAT);
-static hyperdex::index_map i_map_string_string(HYPERDATATYPE_STRING, HYPERDATATYPE_STRING);
-static hyperdex::index_map i_map_string_int64(HYPERDATATYPE_STRING, HYPERDATATYPE_INT64);
-static hyperdex::index_map i_map_string_float(HYPERDATATYPE_STRING, HYPERDATATYPE_FLOAT);
-static hyperdex::index_map i_map_int64_string(HYPERDATATYPE_INT64, HYPERDATATYPE_STRING);
-static hyperdex::index_map i_map_int64_int64(HYPERDATATYPE_INT64, HYPERDATATYPE_INT64);
-static hyperdex::index_map i_map_int64_float(HYPERDATATYPE_INT64, HYPERDATATYPE_FLOAT);
-static hyperdex::index_map i_map_float_string(HYPERDATATYPE_FLOAT, HYPERDATATYPE_STRING);
-static hyperdex::index_map i_map_float_int64(HYPERDATATYPE_FLOAT, HYPERDATATYPE_INT64);
-static hyperdex::index_map i_map_float_float(HYPERDATATYPE_FLOAT, HYPERDATATYPE_FLOAT);
+static const hyperdex::index_encoding_string e_string;
+static const hyperdex::index_encoding_document e_document;
+static const hyperdex::index_encoding_int64 e_int64;
+static const hyperdex::index_encoding_float e_float;
+static const hyperdex::index_encoding_timestamp e_timestamp;
 
-index_info*
+static const hyperdex::index_string i_string;
+static const hyperdex::index_int64 i_int64;
+static const hyperdex::index_float i_float;
+static const hyperdex::index_document i_document;
+static const hyperdex::index_list i_list_string(HYPERDATATYPE_STRING);
+static const hyperdex::index_list i_list_int64(HYPERDATATYPE_INT64);
+static const hyperdex::index_list i_list_float(HYPERDATATYPE_FLOAT);
+static const hyperdex::index_set i_set_string(HYPERDATATYPE_STRING);
+static const hyperdex::index_set i_set_int64(HYPERDATATYPE_INT64);
+static const hyperdex::index_set i_set_float(HYPERDATATYPE_FLOAT);
+static const hyperdex::index_map i_map_string_string(HYPERDATATYPE_STRING, HYPERDATATYPE_STRING);
+static const hyperdex::index_map i_map_string_int64(HYPERDATATYPE_STRING, HYPERDATATYPE_INT64);
+static const hyperdex::index_map i_map_string_float(HYPERDATATYPE_STRING, HYPERDATATYPE_FLOAT);
+static const hyperdex::index_map i_map_int64_string(HYPERDATATYPE_INT64, HYPERDATATYPE_STRING);
+static const hyperdex::index_map i_map_int64_int64(HYPERDATATYPE_INT64, HYPERDATATYPE_INT64);
+static const hyperdex::index_map i_map_int64_float(HYPERDATATYPE_INT64, HYPERDATATYPE_FLOAT);
+static const hyperdex::index_map i_map_float_string(HYPERDATATYPE_FLOAT, HYPERDATATYPE_STRING);
+static const hyperdex::index_map i_map_float_int64(HYPERDATATYPE_FLOAT, HYPERDATATYPE_INT64);
+static const hyperdex::index_map i_map_float_float(HYPERDATATYPE_FLOAT, HYPERDATATYPE_FLOAT);
+static const hyperdex::index_timestamp i_timestamp_second(HYPERDATATYPE_TIMESTAMP_SECOND);
+static const hyperdex::index_timestamp i_timestamp_minute(HYPERDATATYPE_TIMESTAMP_MINUTE);
+static const hyperdex::index_timestamp i_timestamp_hour(HYPERDATATYPE_TIMESTAMP_HOUR);
+static const hyperdex::index_timestamp i_timestamp_day(HYPERDATATYPE_TIMESTAMP_DAY);
+static const hyperdex::index_timestamp i_timestamp_week(HYPERDATATYPE_TIMESTAMP_WEEK);
+static const hyperdex::index_timestamp i_timestamp_month(HYPERDATATYPE_TIMESTAMP_MONTH);
+
+const index_encoding*
+index_encoding :: lookup(hyperdatatype datatype)
+{
+    switch (datatype)
+    {
+        case HYPERDATATYPE_STRING:
+            return &e_string;
+        case HYPERDATATYPE_INT64:
+            return &e_int64;
+        case HYPERDATATYPE_FLOAT:
+            return &e_float;
+        case HYPERDATATYPE_TIMESTAMP_SECOND:
+        case HYPERDATATYPE_TIMESTAMP_MINUTE:
+        case HYPERDATATYPE_TIMESTAMP_HOUR:
+        case HYPERDATATYPE_TIMESTAMP_DAY:
+        case HYPERDATATYPE_TIMESTAMP_WEEK:
+        case HYPERDATATYPE_TIMESTAMP_MONTH:
+            return &e_timestamp;
+        case HYPERDATATYPE_DOCUMENT:
+            return &e_document;
+        case HYPERDATATYPE_GENERIC:
+        case HYPERDATATYPE_LIST_GENERIC:
+        case HYPERDATATYPE_LIST_STRING:
+        case HYPERDATATYPE_LIST_INT64:
+        case HYPERDATATYPE_LIST_FLOAT:
+        case HYPERDATATYPE_SET_GENERIC:
+        case HYPERDATATYPE_SET_STRING:
+        case HYPERDATATYPE_SET_INT64:
+        case HYPERDATATYPE_SET_FLOAT:
+        case HYPERDATATYPE_MAP_GENERIC:
+        case HYPERDATATYPE_TIMESTAMP_GENERIC:
+        case HYPERDATATYPE_MAP_STRING_KEYONLY:
+        case HYPERDATATYPE_MAP_STRING_STRING:
+        case HYPERDATATYPE_MAP_STRING_INT64:
+        case HYPERDATATYPE_MAP_STRING_FLOAT:
+        case HYPERDATATYPE_MAP_INT64_KEYONLY:
+        case HYPERDATATYPE_MAP_INT64_STRING:
+        case HYPERDATATYPE_MAP_INT64_INT64:
+        case HYPERDATATYPE_MAP_INT64_FLOAT:
+        case HYPERDATATYPE_MAP_FLOAT_KEYONLY:
+        case HYPERDATATYPE_MAP_FLOAT_STRING:
+        case HYPERDATATYPE_MAP_FLOAT_INT64:
+        case HYPERDATATYPE_MAP_FLOAT_FLOAT:
+        case HYPERDATATYPE_MACAROON_SECRET:
+        case HYPERDATATYPE_GARBAGE:
+        default:
+            abort();
+    }
+}
+
+index_encoding :: index_encoding()
+{
+}
+
+index_encoding :: ~index_encoding() throw ()
+{
+}
+
+const index_info*
 index_info :: lookup(hyperdatatype datatype)
 {
     switch (datatype)
@@ -68,6 +142,20 @@ index_info :: lookup(hyperdatatype datatype)
             return &i_int64;
         case HYPERDATATYPE_FLOAT:
             return &i_float;
+        case HYPERDATATYPE_TIMESTAMP_SECOND:
+            return &i_timestamp_second;
+        case HYPERDATATYPE_TIMESTAMP_MINUTE:
+            return &i_timestamp_minute;
+        case HYPERDATATYPE_TIMESTAMP_HOUR:
+            return &i_timestamp_hour;
+        case HYPERDATATYPE_TIMESTAMP_DAY:
+            return &i_timestamp_day;
+        case HYPERDATATYPE_TIMESTAMP_WEEK:
+            return &i_timestamp_week;
+        case HYPERDATATYPE_TIMESTAMP_MONTH:
+            return &i_timestamp_month;
+        case HYPERDATATYPE_DOCUMENT:
+            return &i_document;
         case HYPERDATATYPE_LIST_STRING:
             return &i_list_string;
         case HYPERDATATYPE_LIST_INT64:
@@ -105,9 +193,11 @@ index_info :: lookup(hyperdatatype datatype)
         case HYPERDATATYPE_MAP_STRING_KEYONLY:
         case HYPERDATATYPE_MAP_INT64_KEYONLY:
         case HYPERDATATYPE_MAP_FLOAT_KEYONLY:
+        case HYPERDATATYPE_TIMESTAMP_GENERIC:
+        case HYPERDATATYPE_MACAROON_SECRET:
         case HYPERDATATYPE_GARBAGE:
         default:
-            return NULL;
+            abort();
     }
 }
 
@@ -120,10 +210,18 @@ index_info :: ~index_info() throw ()
 }
 
 datalayer::index_iterator*
+index_info :: iterator_for_keys(leveldb_snapshot_ptr,
+                                const region_id&) const
+{
+    return NULL;
+}
+
+datalayer::index_iterator*
 index_info :: iterator_from_range(leveldb_snapshot_ptr,
                                   const region_id&,
+                                  const index_id&,
                                   const range&,
-                                  index_info*)
+                                  const index_encoding*) const
 {
     return NULL;
 }
@@ -131,8 +229,9 @@ index_info :: iterator_from_range(leveldb_snapshot_ptr,
 datalayer::index_iterator*
 index_info :: iterator_from_check(leveldb_snapshot_ptr,
                                   const region_id&,
+                                  const index_id&,
                                   const attribute_check&,
-                                  index_info*)
+                                  const index_encoding*) const
 {
     return NULL;
 }

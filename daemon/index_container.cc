@@ -46,49 +46,17 @@ index_container :: ~index_container() throw ()
 {
 }
 
-bool
-index_container :: encoding_fixed()
-{
-    abort();
-}
-
-size_t
-index_container :: encoded_size(const e::slice&)
-{
-    abort();
-}
-
-char*
-index_container :: encode(const e::slice&, char*)
-{
-    abort();
-}
-
-size_t
-index_container :: decoded_size(const e::slice&)
-{
-    abort();
-}
-
-char*
-index_container :: decode(const e::slice&, char*)
-{
-    abort();
-}
-
 void
-index_container :: index_changes(const region_id& ri,
-                                 uint16_t attr,
-                                 index_info* key_ii,
+index_container :: index_changes(const index* idx,
+                                 const region_id& ri,
+                                 const index_encoding* key_ie,
                                  const e::slice& key,
                                  const e::slice* old_value,
                                  const e::slice* new_value,
-                                 leveldb::WriteBatch* updates)
+                                 leveldb::WriteBatch* updates) const
 {
     std::vector<e::slice> old_elems;
     std::vector<e::slice> new_elems;
-    std::vector<char> scratch;
-    leveldb::Slice slice;
 
     if (old_value)
     {
@@ -109,14 +77,14 @@ index_container :: index_changes(const region_id& ri,
     new_elems.resize(it - new_elems.begin());
     size_t old_idx = 0;
     size_t new_idx = 0;
-    index_info* ii = this->element_index_info();
+    const index_info* ii = this->element_index_info();
 
     while (old_idx < old_elems.size() &&
            new_idx < new_elems.size())
     {
         if (old_elems[old_idx] == new_elems[new_idx])
         {
-            ii->index_changes(ri, attr, key_ii, key,
+            ii->index_changes(idx, ri, key_ie, key,
                               &old_elems[old_idx], &new_elems[new_idx],
                               updates);
             ++old_idx;
@@ -124,13 +92,13 @@ index_container :: index_changes(const region_id& ri,
         }
         else if (old_elems[old_idx] < new_elems[new_idx])
         {
-            ii->index_changes(ri, attr, key_ii, key,
+            ii->index_changes(idx, ri, key_ie, key,
                               &old_elems[old_idx], NULL, updates);
             ++old_idx;
         }
         else if (old_elems[old_idx] > new_elems[new_idx])
         {
-            ii->index_changes(ri, attr, key_ii, key,
+            ii->index_changes(idx, ri, key_ie, key,
                               NULL, &new_elems[new_idx], updates);
             ++new_idx;
         }
@@ -138,14 +106,14 @@ index_container :: index_changes(const region_id& ri,
 
     while (old_idx < old_elems.size())
     {
-        ii->index_changes(ri, attr, key_ii, key,
+        ii->index_changes(idx, ri, key_ie, key,
                           &old_elems[old_idx], NULL, updates);
         ++old_idx;
     }
 
     while (new_idx < new_elems.size())
     {
-        ii->index_changes(ri, attr, key_ii, key,
+        ii->index_changes(idx, ri, key_ie, key,
                           NULL, &new_elems[new_idx], updates);
         ++new_idx;
     }
@@ -154,8 +122,9 @@ index_container :: index_changes(const region_id& ri,
 datalayer::index_iterator*
 index_container :: iterator_from_check(leveldb_snapshot_ptr snap,
                                        const region_id& ri,
+                                       const index_id& ii,
                                        const attribute_check& c,
-                                       index_info* key_ii)
+                                       const index_encoding* key_ie) const
 {
     if (c.predicate == HYPERPREDICATE_CONTAINS &&
         c.datatype == this->element_datatype_info()->datatype())
@@ -168,7 +137,7 @@ index_container :: iterator_from_check(leveldb_snapshot_ptr snap,
         r.has_start = true;
         r.has_end = true;
         r.invalid = false;
-        return this->element_index_info()->iterator_from_range(snap, ri, r, key_ii);
+        return this->element_index_info()->iterator_from_range(snap, ri, ii, r, key_ie);
     }
 
     return NULL;

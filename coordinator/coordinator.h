@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Cornell University
+// Copyright (c) 2012-2013, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,30 +28,28 @@
 #ifndef hyperdex_coordinator_coordinator_h_
 #define hyperdex_coordinator_coordinator_h_
 
-// C
-#include <cstdlib>
-
 // STL
-#include <list>
 #include <map>
-#include <memory>
-#include <utility>
-#include <vector>
 
 // po6
 #include <po6/net/location.h>
 
+// e
+#include <e/compat.h>
+
 // Replicant
-#include <replicant_state_machine.h>
+#include <rsm.h>
 
 // HyperDex
 #include "namespace.h"
-#include "common/capture.h"
 #include "common/hyperspace.h"
 #include "common/ids.h"
+#include "common/server.h"
 #include "common/transfer.h"
-#include "coordinator/missing_acks.h"
-#include "coordinator/server_state.h"
+#include "coordinator/offline_server.h"
+#include "coordinator/region_intent.h"
+#include "coordinator/replica_sets.h"
+#include "coordinator/server_barrier.h"
 
 BEGIN_HYPERDEX_NAMESPACE
 
@@ -61,96 +59,173 @@ class coordinator
         coordinator();
         ~coordinator() throw ();
 
+    // identity
     public:
-        uint64_t cluster() const;
+        void init(rsm_context* ctx, uint64_t token);
+        uint64_t cluster() const { return m_cluster; }
 
+    // cluster management
     public:
-        // Setup the cluster
-        void initialize(replicant_state_machine_context* ctx, uint64_t token);
-        // Manage spaces
-        void add_space(replicant_state_machine_context* ctx, const space& s);
-        void rm_space(replicant_state_machine_context* ctx, const char* name);
-        // Issue configs
-        void get_config(replicant_state_machine_context* ctx);
-        void ack_config(replicant_state_machine_context* ctx, const server_id&, uint64_t version);
-        // Manage cluster membership
-        void server_register(replicant_state_machine_context* ctx,
+        void read_only(rsm_context* ctx, bool ro);
+        void fault_tolerance(rsm_context* ctx,
+                             const char* space, uint64_t consistency);
+
+    // server management
+    public:
+        void server_register(rsm_context* ctx,
                              const server_id& sid,
                              const po6::net::location& bind_to);
-        void server_reregister(replicant_state_machine_context* ctx,
+        void server_online(rsm_context* ctx,
+                           const server_id& sid,
+                           const po6::net::location* bind_to);
+        void server_offline(rsm_context* ctx,
+                            const server_id& sid);
+        void server_shutdown(rsm_context* ctx,
+                             const server_id& sid);
+        void server_kill(rsm_context* ctx,
+                         const server_id& sid);
+        void server_forget(rsm_context* ctx,
+                           const server_id& sid);
+        void server_suspect(rsm_context* ctx,
+                            const server_id& sid);
+        void report_disconnect(rsm_context* ctx,
+                               const server_id& sid, uint64_t version);
+
+    // space management
+    public:
+        void space_add(rsm_context* ctx, const space& s);
+        void space_rm(rsm_context* ctx, const char* name);
+        void space_mv(rsm_context* ctx, const char* src, const char* dst);
+
+    // index management
+    public:
+        void index_add(rsm_context* ctx, const char* space, const char* attr);
+        void index_rm(rsm_context* ctx, index_id ii);
+
+    // transfers management
+    public:
+        void transfer_go_live(rsm_context* ctx,
+                              const transfer_id& xid);
+        void transfer_complete(rsm_context* ctx,
+                               const transfer_id& xid);
+
+    // config management
+    public:
+        void config_get(rsm_context* ctx);
+        void config_ack(rsm_context* ctx,
+                        const server_id& sid, uint64_t version);
+        void config_stable(rsm_context* ctx,
+                           const server_id& sid, uint64_t version);
+
+    // checkpoint management
+    public:
+        void checkpoint(rsm_context* ctx);
+        void checkpoint_stable(rsm_context* ctx,
                                const server_id& sid,
-                               const po6::net::location& bind_to);
-        void server_suspect(replicant_state_machine_context* ctx,
-                            const server_id& sid, uint64_t version);
-        void server_shutdown1(replicant_state_machine_context* ctx,
-                              const server_id& sid);
-        void server_shutdown2(replicant_state_machine_context* ctx,
-                              const server_id& sid);
-        // Transfers
-        void xfer_begin(replicant_state_machine_context* ctx,
-                        const region_id& rid,
-                        const server_id& sid);
-        void xfer_go_live(replicant_state_machine_context* ctx,
-                          const transfer_id& xid);
-        void xfer_complete(replicant_state_machine_context* ctx,
-                           const transfer_id& xid);
+                               uint64_t config,
+                               uint64_t number);
+        void checkpoints(rsm_context* ctx);
+
+    // periodic
+    public:
+        void periodic(rsm_context* ctx);
+
+    // debug
+    public:
+        void debug_dump(rsm_context* ctx);
+
+    // backup/restore
+    public:
+        static coordinator* recreate(rsm_context* ctx,
+                                     const char* data, size_t data_sz);
+        int snapshot(rsm_context* ctx,
+                     char** data, size_t* data_sz);
 
     private:
+        typedef e::compat::shared_ptr<space> space_ptr;
+        typedef std::map<std::string, space_ptr > space_map_t;
+        struct transfer_sorter;
+
+    // utilities
+    private:
         // servers
-        server_state* get_state(const server_id& sid);
-        bool is_registered(const server_id& sid);
-        bool is_registered(const po6::net::location& bind_to);
-        // regions
+        server* new_server(const server_id& sid);
+        server* get_server(const server_id& sid);
+        // replica sets
+        bool in_permutation(const server_id& sid);
+        void add_permutation(const server_id& sid);
+        void remove_permutation(const server_id& sid);
+        void rebalance_replica_sets(rsm_context* ctx);
+        // hyperspace
+        void initial_space_layout(rsm_context* ctx,
+                                  space* s);
         region* get_region(const region_id& rid);
-        // captures
-        capture* new_capture(const region_id& rid);
-        capture* get_capture(const region_id& rid);
+        // intents
+        void setup_intents(rsm_context* ctx,
+                           const std::vector<replica_set>& replica_sets,
+                           space* s, bool skip_transfers);
+        // looks up region_intent* ri, removing any possibility of the user
+        // using an invalid pointer
+        void converge_intent(rsm_context* ctx,
+                             region* reg);
+        // ri and m_intents may be changed after this call
+        void converge_intent(rsm_context* ctx,
+                             region* reg, region_intent* ri);
+        region_intent* new_region_intent(const region_id& rid);
+        region_intent* get_region_intent(const region_id& rid);
+        void del_region_intent(const region_id& rid);
+        void remove_offline(const region_id& rid);
+        void remove_offline(const server_id& sid);
         // transfers
-        transfer* new_transfer(region* reg, const server_id& sid);
+        transfer* new_transfer(region* reg, const server_id& si);
         transfer* get_transfer(const region_id& rid);
         transfer* get_transfer(const transfer_id& xid);
         void del_transfer(const transfer_id& xid);
-        // capture references
-        void add_capture_reference(const server_id& sid, const capture_id& cid);
-        void add_capture_reference(const transfer_id& xid, const capture_id& cid);
-        void release_capture_reference(const transfer_id& xid);
-        void release_capture_references(const server_id& sid);
-        void maybe_garbage_collect_references(const capture_id& cid);
-        // region references
-        void add_region_reference(const server_id& sid, const region_id& rid);
-        server_id get_region_reference(const region_id& rid);
-        void release_region_reference(const region_id& rid);
-        void release_region_references(const server_id& sid);
-        // other
-        void remove_server(const server_id& sid, bool dry_run, bool shutdown,
-                           std::vector<region_id>* rids,
-                           std::vector<transfer_id>* xids);
-        server_id select_new_server_for(const std::vector<replica>& replicas);
-        void issue_new_config(struct replicant_state_machine_context* ctx);
-        void initial_layout(struct replicant_state_machine_context* ctx, space* s);
-        void maintain_layout(struct replicant_state_machine_context* ctx);
-        void regenerate_cached(struct replicant_state_machine_context* ctx);
+        // configuration
+        void check_ack_condition(rsm_context* ctx);
+        void check_stable_condition(rsm_context* ctx);
+        void generate_next_configuration(rsm_context* ctx);
+        void generate_cached_configuration(rsm_context* ctx);
+        void prioritized_transfer_subset(std::vector<transfer>* transfers);
+        void servers_in_configuration(std::vector<server_id>* sids);
+        void regions_in_space(space_ptr s, std::vector<region_id>* rids);
+        // checkpoints
+        void check_checkpoint_stable_condition(rsm_context* ctx, bool reissue);
+        void broadcast_checkpoint_information(rsm_context* ctx);
 
     private:
+        // meta state
         uint64_t m_cluster;
-        uint64_t m_version;
         uint64_t m_counter;
-        uint64_t m_acked;
-        std::vector<server_state> m_servers;
-        std::map<std::string, std::tr1::shared_ptr<space> > m_spaces;
-        std::vector<capture> m_captures;
+        uint64_t m_version;
+        uint64_t m_flags;
+        // servers
+        std::vector<server> m_servers;
+        // replica sets
+        std::vector<server_id> m_permutation;
+        std::vector<server_id> m_spares;
+        uint64_t m_desired_spares;
+        // spaces
+        space_map_t m_spaces;
+        // intents
+        std::vector<region_intent> m_intents;
+        std::vector<space_id> m_deferred_init;
+        std::vector<offline_server> m_offline;
+        // transfers
         std::vector<transfer> m_transfers;
-        std::list<missing_acks> m_missing_acks;
-        std::vector<std::pair<capture_id, server_id> > m_capture_server_references;
-        std::vector<std::pair<capture_id, transfer_id> > m_capture_transfer_references;
-        std::vector<std::pair<region_id, server_id> > m_region_server_references;
-        std::auto_ptr<e::buffer> m_latest_config; // cached config
-        std::auto_ptr<e::buffer> m_resp; // response space
-#ifdef __APPLE__
-        unsigned int m_seed;
-#else
-        drand48_data m_seed;
-#endif
+        // barriers
+        uint64_t m_config_ack_through;
+        server_barrier m_config_ack_barrier;
+        uint64_t m_config_stable_through;
+        server_barrier m_config_stable_barrier;
+        // checkpoints
+        uint64_t m_checkpoint;
+        uint64_t m_checkpoint_stable_through;
+        uint64_t m_checkpoint_gc_through;
+        server_barrier m_checkpoint_stable_barrier;
+        // cached config
+        std::auto_ptr<e::buffer> m_latest_config;
+        std::auto_ptr<e::buffer> m_response;
 
     private:
         coordinator(const coordinator&);

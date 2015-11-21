@@ -95,7 +95,7 @@ bool
 communication :: setup(const po6::net::location& bind_to,
                        unsigned threads)
 {
-    m_busybee.reset(new busybee_mta(&m_busybee_mapper, bind_to, m_daemon->m_us.get(), threads));
+    m_busybee.reset(new busybee_mta(&m_daemon->m_gc, &m_busybee_mapper, bind_to, m_daemon->m_us.get(), threads));
     m_busybee->set_ignore_signals();
     return true;
 }
@@ -405,7 +405,8 @@ communication :: send_exact(const virtual_server_id& from,
 }
 
 bool
-communication :: recv(server_id* from,
+communication :: recv(e::garbage_collector::thread_state* ts,
+                      server_id* from,
                       virtual_server_id* vfrom,
                       virtual_server_id* vto,
                       network_msgtype* msg_type,
@@ -421,7 +422,7 @@ communication :: recv(server_id* from,
     while (true)
     {
         uint64_t id;
-        busybee_returncode rc = m_busybee->recv(&id, msg);
+        busybee_returncode rc = m_busybee->recv(ts, &id, msg);
 
         switch (rc)
         {
@@ -516,10 +517,6 @@ communication :: handle_disruption(uint64_t id)
 {
     if (m_daemon->m_config.get_address(server_id(id)) != po6::net::location())
     {
-        m_daemon->m_coord.report_tcp_disconnect(server_id(id));
-        // XXX If the above line changes, then we need to sometimes tell
-        // the transfer manager to resend all that is unacked  Right now, it
-        // will cause a deadlock.
-        // m_daemon->m_stm.retransmit(server_id(id));
+        m_daemon->m_coord->report_tcp_disconnect(m_daemon->m_config.version(), server_id(id));
     }
 }

@@ -31,13 +31,13 @@
 using hyperdex::pending_search_describe;
 
 pending_search_describe :: pending_search_describe(uint64_t id,
-                                                   hyperclient_returncode* status,
+                                                   hyperdex_client_returncode* status,
                                                    const char** description)
     : pending_aggregation(id, status)
     , m_description(description)
-    , m_error(HYPERCLIENT_SUCCESS)
     , m_done(false)
     , m_msgs()
+    , m_text()
 {
 }
 
@@ -52,12 +52,23 @@ pending_search_describe :: can_yield()
 }
 
 bool
-pending_search_describe :: yield(hyperclient_returncode* status)
+pending_search_describe :: yield(hyperdex_client_returncode* status, e::error* err)
 {
-    *status = HYPERCLIENT_SUCCESS;
+    std::ostringstream ostr;
+
+    for (size_t i = 0; i < m_msgs.size(); ++i)
+    {
+        ostr << m_msgs[i].first << " " << m_msgs[i].second << "\n";
+    }
+
+    m_text = ostr.str();
+    *status = HYPERDEX_CLIENT_SUCCESS;
+    *m_description = m_text.c_str();
+    *err = e::error();
     assert(this->can_yield());
     m_done = true;
-    set_status(m_error);
+    set_status(HYPERDEX_CLIENT_SUCCESS);
+    set_error(e::error());
     return true;
 }
 
@@ -84,22 +95,22 @@ pending_search_describe :: handle_message(client* cl,
                                           network_msgtype mt,
                                           std::auto_ptr<e::buffer>,
                                           e::unpacker up,
-                                          hyperclient_returncode* status)
+                                          hyperdex_client_returncode* status,
+                                          e::error* err)
 {
-    if (!pending_aggregation::handle_message(cl, si, vsi, mt, std::auto_ptr<e::buffer>(), up, status))
-    {
-        return false;
-    }
+    bool handled = pending_aggregation::handle_message(cl, si, vsi, mt, std::auto_ptr<e::buffer>(), up, status, err);
+    assert(handled);
 
-    *status = HYPERCLIENT_SUCCESS;
+    *status = HYPERDEX_CLIENT_SUCCESS;
+    *err = e::error();
 
     if (mt != RESP_SEARCH_DESCRIBE)
     {
-        m_error = HYPERCLIENT_SERVERERROR; 
+        add_text(vsi, "sent non-RESP_SEARCH_DESCRIBE message");
         return true;
     }
 
-    e::slice text = up.as_slice();
+    e::slice text = up.remainder();
     add_text(vsi, text);
     return true;
 }

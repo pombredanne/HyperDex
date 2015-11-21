@@ -31,7 +31,7 @@
 #include <algorithm>
 
 // HyperDex
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
 #include "common/range_searches.h"
 
 using hyperdex::attribute_check;
@@ -40,8 +40,10 @@ using hyperdex::range;
 
 // the caller of this function is safe to assume that only checks with
 //  * HYPERPREDICATE_EQUAL
+//  * HYPERPREDICATE_LESS_THAN
 //  * HYPERPREDICATE_LESS_EQUAL
 //  * HYPERPREDICATE_GREATER_EQUAL
+//  * HYPERPREDICATE_GREATER_THAN
 // will be used to construct the returned ranges.  If you break this assumption,
 // you will need to look at the way indices are picked in the data layer and the
 // way ranges are picked for hyperspace hashing.
@@ -59,6 +61,7 @@ range_search(const attribute_check& check, range* r)
             r->has_end = true;
             r->invalid = false;
             return true;
+        case HYPERPREDICATE_LESS_THAN:
         case HYPERPREDICATE_LESS_EQUAL:
             r->attr = check.attr;
             r->type = check.datatype;
@@ -68,6 +71,7 @@ range_search(const attribute_check& check, range* r)
             r->invalid = false;
             return true;
         case HYPERPREDICATE_GREATER_EQUAL:
+        case HYPERPREDICATE_GREATER_THAN:
             r->attr = check.attr;
             r->type = check.datatype;
             r->start = check.value;
@@ -144,7 +148,8 @@ compress_ranges(const range* range_ptr, const range* range_end, range* r)
 }
 
 void
-hyperdex :: range_searches(const std::vector<attribute_check>& checks,
+hyperdex :: range_searches(const schema& sc,
+                           const std::vector<attribute_check>& checks,
                            std::vector<range>* ranges)
 {
     std::vector<range> raw_ranges;
@@ -152,6 +157,12 @@ hyperdex :: range_searches(const std::vector<attribute_check>& checks,
 
     for (size_t i = 0; i < checks.size(); ++i)
     {
+        if (checks[i].attr >= sc.attrs_sz ||
+            datatype_info::lookup(sc.attrs[checks[i].attr].type)->document())
+        {
+            continue;
+        }
+
         range r;
 
         if (range_search(checks[i], &r))

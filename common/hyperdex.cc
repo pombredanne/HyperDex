@@ -26,10 +26,11 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // HyperDex
-#include "hyperdex.h"
+#include <hyperdex.h>
+#include "visibility.h"
 #include "common/macros.h"
 
-std::ostream&
+HYPERDEX_API std::ostream&
 operator << (std::ostream& lhs, hyperdatatype rhs)
 {
     switch (rhs)
@@ -38,6 +39,7 @@ operator << (std::ostream& lhs, hyperdatatype rhs)
         STRINGIFY(HYPERDATATYPE_STRING);
         STRINGIFY(HYPERDATATYPE_INT64);
         STRINGIFY(HYPERDATATYPE_FLOAT);
+        STRINGIFY(HYPERDATATYPE_DOCUMENT);
         STRINGIFY(HYPERDATATYPE_LIST_GENERIC);
         STRINGIFY(HYPERDATATYPE_LIST_STRING);
         STRINGIFY(HYPERDATATYPE_LIST_INT64);
@@ -59,6 +61,14 @@ operator << (std::ostream& lhs, hyperdatatype rhs)
         STRINGIFY(HYPERDATATYPE_MAP_FLOAT_STRING);
         STRINGIFY(HYPERDATATYPE_MAP_FLOAT_INT64);
         STRINGIFY(HYPERDATATYPE_MAP_FLOAT_FLOAT);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_GENERIC);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_SECOND);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_MINUTE);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_HOUR);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_DAY);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_WEEK);
+        STRINGIFY(HYPERDATATYPE_TIMESTAMP_MONTH);
+        STRINGIFY(HYPERDATATYPE_MACAROON_SECRET);
         STRINGIFY(HYPERDATATYPE_GARBAGE);
         default:
             lhs << "unknown hyperdatatype";
@@ -68,15 +78,17 @@ operator << (std::ostream& lhs, hyperdatatype rhs)
     return lhs;
 }
 
-std::ostream&
+HYPERDEX_API std::ostream&
 operator << (std::ostream& lhs, hyperpredicate rhs)
 {
     switch (rhs)
     {
         STRINGIFY(HYPERPREDICATE_FAIL);
         STRINGIFY(HYPERPREDICATE_EQUALS);
+        STRINGIFY(HYPERPREDICATE_LESS_THAN);
         STRINGIFY(HYPERPREDICATE_LESS_EQUAL);
         STRINGIFY(HYPERPREDICATE_GREATER_EQUAL);
+        STRINGIFY(HYPERPREDICATE_GREATER_THAN);
         STRINGIFY(HYPERPREDICATE_CONTAINS_LESS_THAN);
         STRINGIFY(HYPERPREDICATE_REGEX);
         STRINGIFY(HYPERPREDICATE_LENGTH_EQUALS);

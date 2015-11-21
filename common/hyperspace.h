@@ -38,6 +38,7 @@
 // HyperDex
 #include "namespace.h"
 #include "common/ids.h"
+#include "common/index.h"
 #include "common/schema.h"
 
 BEGIN_HYPERDEX_NAMESPACE
@@ -56,6 +57,7 @@ class space
 
     public:
         bool validate() const;
+        void reestablish_backing();
 
     public:
         space& operator = (const space&);
@@ -64,16 +66,17 @@ class space
         space_id id;
         const char* name;
         uint64_t fault_tolerance;
+        uint64_t predecessor_width;
         hyperdex::schema sc;
         std::vector<subspace> subspaces;
+        std::vector<index> indices;
+
+        const attribute& get_attribute(uint16_t index) const;
 
     private:
-        friend e::buffer::packer operator << (e::buffer::packer, const space& s);
+        friend e::packer operator << (e::packer, const space& s);
         friend e::unpacker operator >> (e::unpacker, space& s);
         friend size_t pack_size(const space&);
-
-    private:
-        void reestablish_backing();
 
     private:
         e::array_ptr<char> m_c_strs;
@@ -81,8 +84,13 @@ class space
 
 };
 
-e::buffer::packer
-operator << (e::buffer::packer, const space& s);
+inline const attribute& space::get_attribute(uint16_t index) const
+{
+    return m_attrs[index];
+}
+
+e::packer
+operator << (e::packer, const space& s);
 e::unpacker
 operator >> (e::unpacker, space& s);
 size_t
@@ -96,20 +104,16 @@ class subspace
         ~subspace() throw ();
 
     public:
-        bool indexed(uint16_t attr) const;
-
-    public:
         subspace& operator = (const subspace&);
 
     public:
         subspace_id id;
         std::vector<uint16_t> attrs;
-        std::vector<uint16_t> indices;
         std::vector<region> regions;
 };
 
-e::buffer::packer
-operator << (e::buffer::packer, const subspace& s);
+e::packer
+operator << (e::packer, const subspace& s);
 e::unpacker
 operator >> (e::unpacker, subspace& s);
 size_t
@@ -132,8 +136,8 @@ class region
         std::vector<replica> replicas;
 };
 
-e::buffer::packer
-operator << (e::buffer::packer, const region& r);
+e::packer
+operator << (e::packer, const region& r);
 e::unpacker
 operator >> (e::unpacker, region& r);
 size_t
@@ -156,8 +160,8 @@ class replica
         virtual_server_id vsi;
 };
 
-e::buffer::packer
-operator << (e::buffer::packer, const replica& r);
+e::packer
+operator << (e::packer, const replica& r);
 e::unpacker
 operator >> (e::unpacker, replica& r);
 size_t

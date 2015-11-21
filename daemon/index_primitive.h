@@ -37,39 +37,69 @@ BEGIN_HYPERDEX_NAMESPACE
 class index_primitive : public index_info
 {
     protected:
-        index_primitive();
+        index_primitive(const index_encoding* ie);
         virtual ~index_primitive() throw ();
 
     public:
-        virtual void index_changes(const region_id& ri,
-                                   uint16_t attr,
-                                   index_info* key_ii,
+        virtual void index_changes(const index* idx,
+                                   const region_id& ri,
+                                   const index_encoding* key_ie,
                                    const e::slice& key,
                                    const e::slice* old_value,
                                    const e::slice* new_value,
-                                   leveldb::WriteBatch* updates);
+                                   leveldb::WriteBatch* updates) const;
+        virtual datalayer::index_iterator* iterator_for_keys(leveldb_snapshot_ptr snap,
+                                                             const region_id& ri) const;
         virtual datalayer::index_iterator* iterator_from_range(leveldb_snapshot_ptr snap,
                                                                const region_id& ri,
+                                                               const index_id& ii,
                                                                const range& r,
-                                                               index_info* key_ii);
+                                                               const index_encoding* key_ie) const;
 
-    public:
+    private:
+        class range_iterator;
+        class key_iterator;
+
+    private:
+        datalayer::index_iterator* iterator_key(leveldb_snapshot_ptr snap,
+                                                const region_id& ri,
+                                                const range& r,
+                                                const index_encoding* key_ie) const;
+        datalayer::index_iterator* iterator_attr(leveldb_snapshot_ptr snap,
+                                                 const region_id& ri,
+                                                 const index_id& ii,
+                                                 const range& r,
+                                                 const index_encoding* key_ie) const;
+        size_t index_entry_prefix_size(const region_id& ri, const index_id& ii) const;
         void index_entry(const region_id& ri,
-                         uint16_t attr,
+                         const index_id& ii,
                          std::vector<char>* scratch,
-                         leveldb::Slice* slice);
+                         e::slice* slice) const;
         void index_entry(const region_id& ri,
-                         uint16_t attr,
+                         const index_id& ii,
                          const e::slice& value,
                          std::vector<char>* scratch,
-                         leveldb::Slice* slice);
+                         e::slice* slice) const;
         void index_entry(const region_id& ri,
-                         uint16_t attr,
-                         index_info* key_ii,
+                         const index_id& ii,
+                         const e::slice& internal_key,
+                         const e::slice& value,
+                         std::vector<char>* scratch,
+                         e::slice* slice) const;
+        void index_entry(const region_id& ri,
+                         const index_id& ii,
+                         const index_encoding* key_ie,
                          const e::slice& key,
                          const e::slice& value,
                          std::vector<char>* scratch,
-                         leveldb::Slice* slice);
+                         e::slice* slice) const;
+
+    private:
+        index_primitive(const index_primitive&);
+        index_primitive& operator = (const index_primitive&);
+
+    private:
+        const index_encoding *const m_ie;
 };
 
 END_HYPERDEX_NAMESPACE

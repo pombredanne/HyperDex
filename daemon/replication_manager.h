@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2012, Cornell University
+// Copyright (c) 2011-2014, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -30,8 +30,6 @@
 
 // STL
 #include <list>
-#include <tr1/memory>
-#include <tr1/unordered_map>
 
 // po6
 #include <po6/threads/cond.h>
@@ -40,19 +38,26 @@
 
 // e
 #include <e/buffer.h>
+#include <e/compat.h>
 #include <e/intrusive_ptr.h>
-#include <e/lockfree_hash_map.h>
-#include <e/striped_lock.h>
+#include <e/nwf_hash_map.h>
 
 // HyperDex
 #include "namespace.h"
 #include "common/attribute_check.h"
 #include "common/configuration.h"
-#include "common/counter_map.h"
 #include "common/funcall.h"
 #include "common/ids.h"
+#include "common/key_change.h"
 #include "common/network_returncode.h"
+#include "daemon/identifier_collector.h"
+#include "daemon/identifier_generator.h"
+#include "daemon/key_operation.h"
+#include "daemon/key_region.h"
+#include "daemon/key_state.h"
 #include "daemon/reconfigure_returncode.h"
+#include "daemon/region_timestamp.h"
+#include "daemon/state_hash_table.h"
 
 BEGIN_HYPERDEX_NAMESPACE
 class daemon;
@@ -73,6 +78,7 @@ class replication_manager
         void reconfigure(const configuration& old_config,
                          const configuration& new_config,
                          const server_id& us);
+        void debug_dump();
 
     // Network workers call these methods.
     public:
@@ -81,108 +87,95 @@ class replication_manager
         void client_atomic(const server_id& from,
                            const virtual_server_id& to,
                            uint64_t nonce,
-                           bool erase,
-                           bool fail_if_not_found,
-                           bool fail_if_found,
-                           const e::slice& key,
-                           const std::vector<attribute_check>& checks,
-                           const std::vector<funcall>& funcs);
+                           std::auto_ptr<key_change> kc,
+                           std::auto_ptr<e::buffer> backing);
         // These are called in response to messages from other hosts.
         void chain_op(const virtual_server_id& from,
                       const virtual_server_id& to,
-                      bool retransmission,
-                      const region_id& reg_id,
-                      uint64_t seq_id,
+                      uint64_t old_version,
                       uint64_t new_version,
                       bool fresh,
                       bool has_value,
-                      std::auto_ptr<e::buffer> backing,
                       const e::slice& key,
-                      const std::vector<e::slice>& value);
+                      const std::vector<e::slice>& value,
+                      std::auto_ptr<e::buffer> backing);
         void chain_subspace(const virtual_server_id& from,
                             const virtual_server_id& to,
-                            bool retransmission,
-                            const region_id& reg_id,
-                            uint64_t seq_id,
-                            uint64_t version,
-                            std::auto_ptr<e::buffer> backing,
+                            uint64_t old_version,
+                            uint64_t new_version,
                             const e::slice& key,
                             const std::vector<e::slice>& value,
-                            const std::vector<uint64_t>& hashes);
+                            std::auto_ptr<e::buffer> backing,
+                            const region_id& prev_region,
+                            const region_id& this_old_region,
+                            const region_id& this_new_region,
+                            const region_id& next_region);
         void chain_ack(const virtual_server_id& from,
                        const virtual_server_id& to,
-                       bool retransmission,
-                       const region_id& reg_id,
-                       uint64_t seq_id,
                        uint64_t version,
                        const e::slice& key);
-        void chain_gc(const region_id& reg_id, uint64_t seq_id);
-        void trip_periodic();
+        void begin_checkpoint(uint64_t seq);
+        void end_checkpoint(uint64_t seq);
 
     private:
-        class pending; // state for one pending operation
-        class key_region; // a tuple of (key, region)
-        class key_state; // state for a single key
-        class key_state_reference; // hold a reference for a single key
-        static uint64_t hash(const key_region&);
-        typedef e::lockfree_hash_map<key_region, e::intrusive_ptr<key_state>, hash> key_state_map_t;
+        class retransmitter_thread;
+        typedef state_hash_table<key_region, key_state> key_map_t;
+        friend class key_state;
 
     private:
-        replication_manager(const replication_manager&);
-        replication_manager& operator = (const replication_manager&);
-
-    private:
-        uint64_t get_lock_num(const region_id& ri, const e::slice& key);
         // Get the state for the specified key.
         // Returns NULL if there is no key_state that's currently in use.
-        e::intrusive_ptr<key_state> get_key_state(const region_id& ri,
-                                                  const e::slice& key,
-                                                  key_state_reference* ksr);
+        key_state* get_key_state(const region_id& ri,
+                                 const e::slice& key,
+                                 key_map_t::state_reference* ksr);
         // Get the state for the specified key.
         // Will retrieve the state from disk and create the key_state when
         // necessary.
-        e::intrusive_ptr<key_state> get_or_create_key_state(const region_id& ri,
-                                                            const e::slice& key,
-                                                            key_state_reference* ksr);
-        // Send a response to the specified client.
-        void send_message(const virtual_server_id& us,
-                          bool retransmission,
-                          uint64_t version,
-                          const e::slice& key,
-                          e::intrusive_ptr<pending> op);
-        bool send_ack(const virtual_server_id& us,
-                      const virtual_server_id& to,
-                      bool retransmission,
-                      const region_id& reg_id,
-                      uint64_t seq_id,
-                      uint64_t version,
-                      const e::slice& key);
+        key_state* get_or_create_key_state(const region_id& ri,
+                                           const e::slice& key,
+                                           key_map_t::state_reference* ksr);
+        key_state* post_get_key_state_init(region_id ri, key_state* ks);
         void respond_to_client(const virtual_server_id& us,
                                const server_id& client,
                                uint64_t nonce,
                                network_returncode ret);
-        // thread functions
-        void retransmitter();
-        void garbage_collector();
-        void shutdown();
+        bool send_message(const virtual_server_id& us,
+                          const e::slice& key,
+                          e::intrusive_ptr<key_operation> op);
+        bool send_ack(const virtual_server_id& us,
+                      const e::slice& key,
+                      e::intrusive_ptr<key_operation> op);
+        void retransmit(const std::vector<region_id>& point_leaders,
+                        std::vector<std::pair<region_id, uint64_t> >* versions);
+        void collect(const region_id& ri, e::intrusive_ptr<key_operation> op);
+        void collect(const region_id& ri, uint64_t version);
+        void close_gaps(const std::vector<region_id>& point_leaders,
+                        const identifier_generator& peek_ids,
+                        std::vector<std::pair<region_id, uint64_t> >* versions);
+        // call reset_to_unstable holding m_protect_stable_stuff
+        void reset_to_unstable();
+        bool is_check_needed() { return e::atomic::compare_and_swap_32_nobarrier(&m_need_check, 0, 0) == 1; }
+        void check_is_needed() { e::atomic::compare_and_swap_32_nobarrier(&m_need_check, 0, 1); }
+        void check_is_not_needed() { e::atomic::compare_and_swap_32_nobarrier(&m_need_check, 1, 0); }
+        void check_stable();
+        void check_stable(const region_id& ri);
 
     private:
         daemon* m_daemon;
-        e::striped_lock<po6::threads::mutex> m_key_states_locks;
-        key_state_map_t m_key_states;
-        counter_map m_counters;
-        bool m_shutdown;
-        po6::threads::thread m_retransmitter;
-        po6::threads::thread m_garbage_collector;
-        po6::threads::mutex m_block_both;
-        po6::threads::cond m_wakeup_retransmitter;
-        po6::threads::cond m_wakeup_garbage_collector;
-        po6::threads::cond m_wakeup_reconfigurer;
-        bool m_need_retransmit;
-        std::list<std::pair<region_id, uint64_t> > m_lower_bounds;
-        bool m_need_pause;
-        bool m_paused_retransmitter;
-        bool m_paused_garbage_collector;
+        key_map_t m_key_states;
+        identifier_generator m_idgen;
+        identifier_collector m_idcol;
+        identifier_generator m_stable;
+        const std::auto_ptr<retransmitter_thread> m_retransmitter;
+        po6::threads::mutex m_protect_stable_stuff;
+        uint64_t m_checkpoint;
+        uint32_t m_need_check;
+        std::vector<region_timestamp> m_timestamps;
+        std::vector<region_id> m_unstable;
+
+    private:
+        replication_manager(const replication_manager&);
+        replication_manager& operator = (const replication_manager&);
 };
 
 END_HYPERDEX_NAMESPACE

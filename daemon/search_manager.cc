@@ -34,13 +34,15 @@
 // Google Log
 #include <glog/logging.h>
 
+// po6
+#include <po6/time.h>
+
 // e
 #include <e/intrusive_ptr.h>
-#include <e/time.h>
 
 // HyperDex
 #include "common/attribute_check.h"
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
 #include "common/serialization.h"
 #include "daemon/daemon.h"
 #include "daemon/datalayer_iterator.h"
@@ -174,6 +176,16 @@ search_manager :: teardown()
 }
 
 void
+search_manager :: pause()
+{
+}
+
+void
+search_manager :: unpause()
+{
+}
+
+void
 search_manager :: reconfigure(const configuration&,
                               const configuration&,
                               const server_id&)
@@ -190,6 +202,13 @@ search_manager :: start(const server_id& from,
                         std::vector<attribute_check>* checks)
 {
     region_id ri(m_daemon->m_config.get_region_id(to));
+    const schema* sc = m_daemon->m_config.get_schema(ri);
+
+    if (sc->authorization)
+    {
+        return;
+    }
+
     id sid(ri, from, search_id);
 
     if (m_searches.contains(sid))
@@ -231,6 +250,7 @@ search_manager :: next(const server_id& from,
                        uint64_t search_id)
 {
     region_id ri(m_daemon->m_config.get_region_id(to));
+    const schema& sc(*m_daemon->m_config.get_schema(ri));
     id sid(ri, from, search_id);
     e::intrusive_ptr<state> st;
 
@@ -250,7 +270,7 @@ search_manager :: next(const server_id& from,
         std::vector<e::slice> val;
         uint64_t ver;
         datalayer::reference tmp;
-        m_daemon->m_data.get_from_iterator(ri, st->iter.get(), &key, &val, &ver, &tmp);
+        m_daemon->m_data.get_from_iterator(ri, sc, st->iter.get(), &key, &val, &ver, &tmp);
         size_t sz = HYPERDEX_HEADER_SIZE_VC
                   + sizeof(uint64_t)
                   + pack_size(key)
@@ -414,6 +434,13 @@ search_manager :: sorted_search(const server_id& from,
                                 bool maximize)
 {
     region_id ri(m_daemon->m_config.get_region_id(to));
+    const schema* sc = m_daemon->m_config.get_schema(ri);
+
+    if (sc->authorization)
+    {
+        return;
+    }
+
     std::stable_sort(checks->begin(), checks->end());
     datalayer::returncode rc = datalayer::SUCCESS;
     datalayer::snapshot snap = m_daemon->m_data.make_snapshot();
@@ -435,8 +462,6 @@ search_manager :: sorted_search(const server_id& from,
             abort();
     }
 
-    const schema* sc = m_daemon->m_config.get_schema(ri);
-    assert(sc);
     _sorted_search_params params(sc, sort_by, maximize);
     std::vector<_sorted_search_item> top_n;
     top_n.reserve(limit);
@@ -444,7 +469,7 @@ search_manager :: sorted_search(const server_id& from,
     while (iter->valid())
     {
         top_n.push_back(_sorted_search_item(&params));
-        m_daemon->m_data.get_from_iterator(ri, iter.get(), &top_n.back().key, &top_n.back().value, &top_n.back().version, &top_n.back().ref);
+        m_daemon->m_data.get_from_iterator(ri, *sc, iter.get(), &top_n.back().key, &top_n.back().value, &top_n.back().version, &top_n.back().ref);
         std::push_heap(top_n.begin(), top_n.end());
 
         if (top_n.size() > limit)
@@ -465,7 +490,7 @@ search_manager :: sorted_search(const server_id& from,
     }
 
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    e::buffer::packer pa = msg->pack_at(HYPERDEX_HEADER_SIZE_VC);
+    e::packer pa = msg->pack_at(HYPERDEX_HEADER_SIZE_VC);
     pa = pa << nonce << static_cast<uint64_t>(top_n.size());
 
     for (size_t i = 0; i < top_n.size(); ++i)
@@ -486,6 +511,13 @@ search_manager :: group_keyop(const server_id& from,
                               network_msgtype resp)
 {
     region_id ri(m_daemon->m_config.get_region_id(to));
+    const schema* sc = m_daemon->m_config.get_schema(ri);
+
+    if (sc->authorization)
+    {
+        return;
+    }
+
     std::stable_sort(checks->begin(), checks->end());
     datalayer::returncode rc = datalayer::SUCCESS;
     datalayer::snapshot snap = m_daemon->m_data.make_snapshot();
@@ -515,24 +547,20 @@ search_manager :: group_keyop(const server_id& from,
         std::vector<e::slice> val;
         uint64_t ver;
         datalayer::reference tmp;
-        m_daemon->m_data.get_from_iterator(ri, iter.get(), &key, &val, &ver, &tmp);
+        m_daemon->m_data.get_from_iterator(ri, *sc, iter.get(), &key, &val, &ver, &tmp);
         size_t sz = HYPERDEX_HEADER_SIZE_SV // SV because we imitate a client
                   + sizeof(uint64_t)
                   + pack_size(key)
                   + remain.size();
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        e::buffer::packer pa = msg->pack_at(HYPERDEX_HEADER_SIZE_SV);
-        pa = pa << static_cast<uint64_t>(0) << key;
-        pa = pa.copy(remain);
+        msg->pack_at(HYPERDEX_HEADER_SIZE_SV)
+            << uint64_t(0) << key << e::pack_memmove(remain.data(), remain.size());
         virtual_server_id vsi = m_daemon->m_config.point_leader(ri, key);
 
         if (vsi != virtual_server_id())
         {
             m_daemon->m_comm.send(vsi, mt, msg);
-        }
-        else
-        {
-            LOG(ERROR) << "group_keyop could not compute point leader (serious bug; please report)";
+            result++;
         }
 
         iter->next();
@@ -553,6 +581,13 @@ search_manager :: count(const server_id& from,
                         std::vector<attribute_check>* checks)
 {
     region_id ri(m_daemon->m_config.get_region_id(to));
+    const schema* sc = m_daemon->m_config.get_schema(ri);
+
+    if (sc->authorization)
+    {
+        return;
+    }
+
     std::stable_sort(checks->begin(), checks->end());
     datalayer::returncode rc = datalayer::SUCCESS;
     datalayer::snapshot snap = m_daemon->m_data.make_snapshot();
@@ -597,18 +632,25 @@ search_manager :: search_describe(const server_id& from,
                                   std::vector<attribute_check>* checks)
 {
     region_id ri(m_daemon->m_config.get_region_id(to));
+    const schema* sc = m_daemon->m_config.get_schema(ri);
+
+    if (sc->authorization)
+    {
+        return;
+    }
+
     std::stable_sort(checks->begin(), checks->end());
     datalayer::returncode rc = datalayer::SUCCESS;
     std::ostringstream ostr;
     ostr << "search\n";
-    uint64_t t_start = e::time();
+    uint64_t t_start = po6::monotonic_time();
     datalayer::snapshot snap = m_daemon->m_data.make_snapshot();
-    uint64_t t_end = e::time();
+    uint64_t t_end = po6::monotonic_time();
     ostr << " snapshot took " << t_end - t_start << "ns\n";
     e::intrusive_ptr<datalayer::iterator> iter;
-    t_start = e::time();
+    t_start = po6::monotonic_time();
     iter = m_daemon->m_data.make_search_iterator(snap, ri, *checks, &ostr);
-    t_end = e::time();
+    t_end = po6::monotonic_time();
     ostr << " iterator took " << t_end - t_start << "ns\n";
 
     switch (rc)
@@ -627,7 +669,7 @@ search_manager :: search_describe(const server_id& from,
     }
 
     uint64_t num = 0;
-    t_start = e::time();
+    t_start = po6::monotonic_time();
 
     while (iter->valid())
     {
@@ -635,7 +677,7 @@ search_manager :: search_describe(const server_id& from,
         iter->next();
     }
 
-    t_end = e::time();
+    t_end = po6::monotonic_time();
     ostr << " retrieved " << num << " objects in " << t_end - t_start << "ns\n";
     std::string str(ostr.str());
     const char* text = str.c_str();
@@ -644,8 +686,8 @@ search_manager :: search_describe(const server_id& from,
               + sizeof(uint64_t)
               + text_sz;
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    e::buffer::packer pa = msg->pack_at(HYPERDEX_HEADER_SIZE_VC) << nonce;
-    pa.copy(e::slice(text, text_sz));
+    msg->pack_at(HYPERDEX_HEADER_SIZE_VC)
+        << nonce << e::pack_memmove(text, text_sz);
     m_daemon->m_comm.send_client(to, from, RESP_SEARCH_DESCRIBE, msg);
 }
 

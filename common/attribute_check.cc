@@ -30,7 +30,7 @@
 
 // HyperDex
 #include "common/attribute_check.h"
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
 #include "common/serialization.h"
 
 using hyperdex::attribute_check;
@@ -48,14 +48,23 @@ attribute_check :: ~attribute_check() throw ()
 }
 
 bool
-hyperdex :: validate_attribute_check(const schema& sc,
+hyperdex :: validate_attribute_check(hyperdatatype type,
                                      const attribute_check& check)
 {
-    assert(check.attr < sc.attrs_sz);
-    datatype_info* di_attr = datatype_info::lookup(sc.attrs[check.attr].type);
+    datatype_info* di_attr = datatype_info::lookup(type);
     datatype_info* di_check = datatype_info::lookup(check.datatype);
 
-    if (!di_attr || !di_check || !di_check->validate(check.value))
+    if (!di_attr || !di_check)
+    {
+        return false;
+    }
+
+    if (di_attr->document())
+    {
+        return true;
+    }
+
+    if (!di_check->validate(check.value))
     {
         return false;
     }
@@ -66,8 +75,10 @@ hyperdex :: validate_attribute_check(const schema& sc,
             return true;
         case HYPERPREDICATE_EQUALS:
             return di_attr->datatype() == di_check->datatype();
+        case HYPERPREDICATE_LESS_THAN:
         case HYPERPREDICATE_LESS_EQUAL:
         case HYPERPREDICATE_GREATER_EQUAL:
+        case HYPERPREDICATE_GREATER_THAN:
             return di_attr->datatype() == di_check->datatype() &&
                    di_attr->comparable();
         case HYPERPREDICATE_REGEX:
@@ -98,7 +109,9 @@ hyperdex :: validate_attribute_checks(const schema& sc,
             return i;
         }
 
-        if (!validate_attribute_check(sc, checks[i]))
+        hyperdatatype type = sc.attrs[checks[i].attr].type;
+
+        if (!validate_attribute_check(type, checks[i]))
         {
             return i;
         }
@@ -108,16 +121,24 @@ hyperdex :: validate_attribute_checks(const schema& sc,
 }
 
 bool
-hyperdex :: passes_attribute_check(const schema& sc,
+hyperdex :: passes_attribute_check(hyperdatatype type,
                                    const attribute_check& check,
                                    const e::slice& value)
 {
-    assert(check.attr < sc.attrs_sz);
-    datatype_info* di_attr = datatype_info::lookup(sc.attrs[check.attr].type);
+    datatype_info* di_attr = datatype_info::lookup(type);
     datatype_info* di_check = datatype_info::lookup(check.datatype);
 
-    if (!di_attr || !di_check ||
-        !di_attr->validate(value) ||
+    if (!di_attr || !di_check)
+    {
+        return false;
+    }
+
+    if (di_attr->document())
+    {
+        return di_attr->document_check(check, value);
+    }
+
+    if (!di_attr->validate(value) ||
         !di_check->validate(check.value))
     {
         return false;
@@ -132,18 +153,28 @@ hyperdex :: passes_attribute_check(const schema& sc,
             return false;
         case HYPERPREDICATE_EQUALS:
             return di_attr->datatype() == di_check->datatype() &&
-                   check.value == value;
+                   (check.value == value ||
+                    (di_attr->comparable() && di_attr->compare(check.value, value) == 0));
+        case HYPERPREDICATE_LESS_THAN:
+            return di_attr->datatype() == di_check->datatype() &&
+                   di_attr->comparable() &&
+                   di_attr->compare(check.value, value) > 0;
         case HYPERPREDICATE_LESS_EQUAL:
             return di_attr->datatype() == di_check->datatype() &&
                    di_attr->comparable() &&
-                   di_attr->compare(check.value, value) <= 0;
+                   di_attr->compare(check.value, value) >= 0;
         case HYPERPREDICATE_GREATER_EQUAL:
             return di_attr->datatype() == di_check->datatype() &&
                    di_attr->comparable() &&
-                   di_attr->compare(check.value, value) >= 0;
+                   di_attr->compare(check.value, value) <= 0;
+        case HYPERPREDICATE_GREATER_THAN:
+            return di_attr->datatype() == di_check->datatype() &&
+                   di_attr->comparable() &&
+                   di_attr->compare(check.value, value) < 0;
         case HYPERPREDICATE_REGEX:
             return di_check->datatype() == HYPERDATATYPE_STRING &&
-                   di_attr->has_regex();
+                   di_attr->has_regex() &&
+                   di_attr->regex(check.value, value);
         case HYPERPREDICATE_LENGTH_EQUALS:
             memset(buf_i, 0, sizeof(int64_t));
             memmove(buf_i, check.value.data(), std::min(check.value.size(), sizeof(int64_t)));
@@ -188,13 +219,15 @@ hyperdex :: passes_attribute_checks(const schema& sc,
             return i;
         }
 
+        hyperdatatype type = sc.attrs[checks[i].attr].type;
+
         if (checks[i].attr > 0 &&
-            !passes_attribute_check(sc, checks[i], value[checks[i].attr - 1]))
+            !passes_attribute_check(type, checks[i], value[checks[i].attr - 1]))
         {
             return i;
         }
         else if (checks[i].attr == 0 &&
-                 !passes_attribute_check(sc, checks[i], key))
+                 !passes_attribute_check(type, checks[i], key))
         {
             return i;
         }
@@ -207,4 +240,32 @@ bool
 hyperdex :: operator < (const attribute_check& lhs, const attribute_check& rhs)
 {
     return lhs.attr < rhs.attr;
+}
+
+e::packer
+hyperdex :: operator << (e::packer lhs, const attribute_check& rhs)
+{
+    return lhs << rhs.attr
+               << rhs.value
+               << rhs.datatype
+               << rhs.predicate;
+}
+
+e::unpacker
+hyperdex :: operator >> (e::unpacker lhs, attribute_check& rhs)
+{
+    return lhs >> rhs.attr
+               >> rhs.value
+               >> rhs.datatype
+               >> rhs.predicate;
+}
+
+size_t
+hyperdex :: pack_size(const attribute_check& rhs)
+{
+    return sizeof(uint16_t)
+         + sizeof(uint32_t)
+         + rhs.value.size()
+         + pack_size(rhs.datatype)
+         + pack_size(rhs.predicate);
 }

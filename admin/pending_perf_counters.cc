@@ -27,25 +27,15 @@
 
 #define __STDC_LIMIT_MACROS
 
+// po6
+#include <po6/time.h>
+
 // HyperDex
 #include "admin/admin.h"
 #include "admin/constants.h"
 #include "admin/pending_perf_counters.h"
 
 using hyperdex::pending_perf_counters;
-
-static uint64_t
-monotonic_time()
-{
-    timespec ts;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
-    {
-        throw po6::error(errno);
-    }
-
-    return ts.tv_sec * 1000000000ULL + ts.tv_nsec;
-}
 
 struct pending_perf_counters::perf_counter
 {
@@ -139,7 +129,7 @@ int
 pending_perf_counters :: millis_to_next_send()
 {
     const uint64_t one_second = 1000ULL * 1000ULL * 1000ULL;
-    uint64_t now = monotonic_time();
+    uint64_t now = po6::monotonic_time();
 
     if (now >= m_next_send)
     {
@@ -193,11 +183,11 @@ pending_perf_counters :: handle_message(admin*,
 
     if (mt != PERF_COUNTERS)
     {
-        set_status(HYPERDEX_ADMIN_SERVERERROR);
+        YIELDING_ERROR(SERVERERROR) << "server " << si.get() << " responded to PERF_COUNTERS with wrong message type";
         return true;
     }
 
-    e::slice rem = up.as_slice();
+    e::slice rem = up.remainder();
     char* ptr = const_cast<char*>(reinterpret_cast<const char*>(rem.data()));
     char* end = ptr + rem.size() - 1;
     uint64_t max_time = 0;

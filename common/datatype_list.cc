@@ -53,13 +53,13 @@ datatype_list :: ~datatype_list() throw ()
 }
 
 hyperdatatype
-datatype_list :: datatype()
+datatype_list :: datatype() const
 {
     return CREATE_CONTAINER(HYPERDATATYPE_LIST_GENERIC, m_elem->datatype());
 }
 
 bool
-datatype_list :: validate(const e::slice& list)
+datatype_list :: validate(const e::slice& list) const
 {
     const uint8_t* ptr = list.data();
     const uint8_t* end = list.data() + list.size();
@@ -77,7 +77,7 @@ datatype_list :: validate(const e::slice& list)
 }
 
 bool
-datatype_list :: check_args(const funcall& func)
+datatype_list :: check_args(const funcall& func) const
 {
     return ((func.arg1_datatype == datatype() ||
              func.arg1_datatype == HYPERDATATYPE_LIST_GENERIC) &&
@@ -88,10 +88,11 @@ datatype_list :: check_args(const funcall& func)
              func.name == FUNC_LIST_RPUSH));
 }
 
-uint8_t*
+bool
 datatype_list :: apply(const e::slice& old_value,
                        const funcall* funcs, size_t funcs_sz,
-                       uint8_t* writeto)
+                       e::arena* new_memory,
+                       e::slice* new_value) const
 {
     std::list<e::slice> list;
     const uint8_t* ptr = old_value.data();
@@ -131,6 +132,8 @@ datatype_list :: apply(const e::slice& old_value,
             case FUNC_FAIL:
             case FUNC_STRING_APPEND:
             case FUNC_STRING_PREPEND:
+            case FUNC_STRING_LTRIM:
+            case FUNC_STRING_RTRIM:
             case FUNC_NUM_ADD:
             case FUNC_NUM_SUB:
             case FUNC_NUM_MUL:
@@ -139,39 +142,54 @@ datatype_list :: apply(const e::slice& old_value,
             case FUNC_NUM_AND:
             case FUNC_NUM_OR:
             case FUNC_NUM_XOR:
+            case FUNC_NUM_MAX:
+            case FUNC_NUM_MIN:
             case FUNC_SET_ADD:
             case FUNC_SET_REMOVE:
             case FUNC_SET_INTERSECT:
             case FUNC_SET_UNION:
             case FUNC_MAP_ADD:
             case FUNC_MAP_REMOVE:
+            case FUNC_DOC_RENAME:
+            case FUNC_DOC_UNSET:
             default:
                 abort();
         }
     }
 
+    size_t sz = 0;
+
     for (std::list<e::slice>::iterator i = list.begin(); i != list.end(); ++i)
     {
-        writeto = m_elem->write(writeto, *i);
+        sz += m_elem->write_sz(*i);
     }
 
-    return writeto;
+    uint8_t* write_to = NULL;
+    new_memory->allocate(sz, &write_to);
+    *new_value = e::slice(write_to, sz);
+
+    for (std::list<e::slice>::iterator i = list.begin(); i != list.end(); ++i)
+    {
+        write_to = m_elem->write(*i, write_to);
+    }
+
+    return true;
 }
 
 bool
-datatype_list :: indexable()
+datatype_list :: indexable() const
 {
     return m_elem->indexable();
 }
 
 bool
-datatype_list :: has_length()
+datatype_list :: has_length() const
 {
     return true;
 }
 
 uint64_t
-datatype_list :: length(const e::slice& list)
+datatype_list :: length(const e::slice& list) const
 {
     const uint8_t* ptr = list.data();
     const uint8_t* end = list.data() + list.size();
@@ -190,19 +208,19 @@ datatype_list :: length(const e::slice& list)
 }
 
 bool
-datatype_list :: has_contains()
+datatype_list :: has_contains() const
 {
     return true;
 }
 
 hyperdatatype
-datatype_list :: contains_datatype()
+datatype_list :: contains_datatype() const
 {
     return m_elem->datatype();
 }
 
 bool
-datatype_list :: contains(const e::slice& list, const e::slice& needle)
+datatype_list :: contains(const e::slice& list, const e::slice& needle) const
 {
     const uint8_t* ptr = list.data();
     const uint8_t* end = list.data() + list.size();

@@ -28,9 +28,6 @@
 #ifndef hyperdex_daemon_state_transfer_manager_transfer_in_state_h_
 #define hyperdex_daemon_state_transfer_manager_transfer_in_state_h_
 
-// STL
-#include <tr1/memory>
-
 // e
 #include <e/intrusive_ptr.h>
 
@@ -40,20 +37,20 @@
 class hyperdex::state_transfer_manager::transfer_in_state
 {
     public:
-        transfer_in_state(const transfer& xfer,
-                          datalayer* data,
-                          datalayer::snapshot snap);
+        transfer_in_state(const transfer& xfer);
         ~transfer_in_state() throw ();
+
+    public:
+        void debug_dump();
 
     public:
         transfer xfer;
         po6::threads::mutex mtx;
-        bool cleared_capture;
         uint64_t upper_bound_acked;
         std::list<e::intrusive_ptr<pending> > queued;
-        bool need_del;
-        e::intrusive_ptr<pending> prev;
-        e::intrusive_ptr<datalayer::iterator> iter;
+        bool handshake_complete;
+        bool wipe;
+        bool wiped;
 
     private:
         friend class e::intrusive_ptr<transfer_in_state>;

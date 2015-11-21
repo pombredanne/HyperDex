@@ -28,26 +28,40 @@
 #ifndef hyperdex_client_util_h_
 #define hyperdex_client_util_h_
 
+// e
+#include <e/error.h>
+
 // HyperDex
+#include <hyperdex/client.h>
 #include "namespace.h"
 #include "common/configuration.h"
 #include "common/ids.h"
-#include "client/hyperclient.h"
 
 BEGIN_HYPERDEX_NAMESPACE
 
 // Convert the key and value vector returned by entity to an array of
-// hyperclient_attribute using the given configuration.
+// hyperdex_attribute using the given configuration.
 bool
 value_to_attributes(const configuration& config,
                     const region_id& rid,
                     const uint8_t* key,
                     size_t key_sz,
                     const std::vector<e::slice>& value,
-                    hyperclient_returncode* loop_status,
-                    hyperclient_returncode* op_status,
-                    hyperclient_attribute** attrs,
-                    size_t* attrs_sz);
+                    hyperdex_client_returncode* op_status,
+                    e::error* op_error,
+                    const hyperdex_client_attribute** attrs,
+                    size_t* attrs_sz,
+                    bool convert_types);
+
+bool
+value_to_attributes(const configuration& config,
+                    const region_id& rid,
+                    const std::vector<std::pair<uint16_t, e::slice> >& value,
+                    hyperdex_client_returncode* op_status,
+                    e::error* op_error,
+                    const hyperdex_client_attribute** attrs,
+                    size_t* attrs_sz,
+                    bool convert_types);
 
 END_HYPERDEX_NAMESPACE
 

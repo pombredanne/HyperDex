@@ -25,6 +25,11 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
+// Google Log
+#include <glog/logging.h>
+
 // HyperDex
 #include "daemon/datalayer.h"
 #include "daemon/datalayer_iterator.h"
@@ -33,24 +38,28 @@
 
 using hyperdex::state_transfer_manager;
 
-state_transfer_manager :: transfer_in_state :: transfer_in_state(const transfer& _xfer,
-                                                                 datalayer* data,
-                                                                 datalayer::snapshot snap)
+state_transfer_manager :: transfer_in_state :: transfer_in_state(const transfer& _xfer)
     : xfer(_xfer)
     , mtx()
-    , cleared_capture(false)
     , upper_bound_acked(1)
     , queued()
-    , need_del(true)
-    , prev()
-    , iter()
+    , handshake_complete(false)
+    , wipe(false)
+    , wiped(false)
     , m_ref(0)
 {
-    datalayer::returncode rc;
-    iter = data->make_region_iterator(snap, xfer.rid, &rc);
-    assert(rc == datalayer::SUCCESS);
 }
 
 state_transfer_manager :: transfer_in_state :: ~transfer_in_state() throw ()
 {
+}
+
+void
+state_transfer_manager :: transfer_in_state :: debug_dump()
+{
+    po6::threads::mutex::hold hold(&mtx);
+    LOG(INFO) << "  transfer=" << xfer;
+    LOG(INFO) << "    upper_bound_acked=" << upper_bound_acked;
+    LOG(INFO) << "    wipe=" << wipe;
+    LOG(INFO) << "    wiped=" << wiped;
 }

@@ -36,6 +36,7 @@
 
 // STL
 #include <algorithm>
+#include <map>
 #include <sstream>
 #include <string>
 
@@ -47,56 +48,71 @@
 #include <hyperleveldb/filter_policy.h>
 
 // e
+#include <e/atomic.h>
 #include <e/endian.h>
+#include <e/tuple_compare.h>
+#include <e/varint.h>
 
 // HyperDex
-#include "common/datatypes.h"
+#include "common/datatype_info.h"
 #include "common/macros.h"
 #include "common/range_searches.h"
 #include "common/serialization.h"
+#include "daemon/background_thread.h"
 #include "daemon/daemon.h"
 #include "daemon/datalayer.h"
+#include "daemon/datalayer_checkpointer_thread.h"
 #include "daemon/datalayer_encodings.h"
+#include "daemon/datalayer_index_state.h"
+#include "daemon/datalayer_indexer_thread.h"
 #include "daemon/datalayer_iterator.h"
+#include "daemon/datalayer_wiper_thread.h"
+
+#define STRLENOF(x)	(sizeof(x)-1)
 
 // ASSUME:  all keys put into leveldb have a first byte without the high bit set
 
+using po6::threads::make_thread_wrapper;
 using hyperdex::datalayer;
 using hyperdex::reconfigure_returncode;
+
+const hyperdex::region_id datalayer::defaultri;
 
 datalayer :: datalayer(daemon* d)
     : m_daemon(d)
     , m_db()
-    , m_counters()
-    , m_cleaner(std::tr1::bind(&datalayer::cleaner, this))
-    , m_block_cleaner()
-    , m_wakeup_cleaner(&m_block_cleaner)
-    , m_wakeup_reconfigurer(&m_block_cleaner)
-    , m_need_cleaning(false)
-    , m_shutdown(true)
-    , m_need_pause(false)
-    , m_paused(false)
-    , m_state_transfer_captures()
+    , m_indices()
+    , m_versions()
+    , m_checkpointer(new checkpointer_thread(d))
+    , m_mediator(new wiper_indexer_mediator())
+    , m_indexer(new indexer_thread(d, m_mediator.get()))
+    , m_wiper(new wiper_thread(d, m_mediator.get()))
 {
 }
 
 datalayer :: ~datalayer() throw ()
 {
-    shutdown();
+    m_checkpointer->shutdown();
+    m_indexer->shutdown();
+    m_wiper->shutdown();
 }
 
+#define FORMAT_1_6 "v1.6.0 format"
+
 bool
-datalayer :: setup(const po6::pathname& path,
-                   bool* saved,
-                   server_id* saved_us,
-                   po6::net::location* saved_bind_to,
-                   po6::net::hostname* saved_coordinator)
+datalayer :: initialize(const std::string& path,
+                        bool* saved,
+                        server_id* saved_us,
+                        po6::net::location* saved_bind_to,
+                        po6::net::hostname* saved_coordinator)
 {
     leveldb::Options opts;
-    opts.write_buffer_size = 64ULL * 1024ULL * 1024ULL;
+    opts.write_buffer_size = 16ULL * 1024ULL * 1024ULL;
     opts.create_if_missing = true;
     opts.filter_policy = leveldb::NewBloomFilterPolicy(10);
-    std::string name(path.get());
+    opts.manual_garbage_collection = true;
+    opts.max_open_files = std::max(sysconf(_SC_OPEN_MAX) >> 1, 1024L);
+    std::string name(path);
     leveldb::DB* tmp_db;
     leveldb::Status st = leveldb::DB::Open(opts, name, &tmp_db);
 
@@ -110,54 +126,49 @@ datalayer :: setup(const po6::pathname& path,
     leveldb::ReadOptions ropts;
     ropts.fill_cache = true;
     ropts.verify_checksums = true;
+    leveldb::WriteOptions wopts;
+    wopts.sync = true;
 
-    leveldb::Slice rk("hyperdex", 8);
+    // read the "hyperdex" key and check the version
     std::string rbacking;
-    st = m_db->Get(ropts, rk, &rbacking);
+    st = m_db->Get(ropts, leveldb::Slice("hyperdex", 8), &rbacking);
     bool first_time = false;
 
     if (st.ok())
     {
         first_time = false;
 
-        if (rbacking != PACKAGE_VERSION &&
-            rbacking != "1.0.rc1" &&
-            rbacking != "1.0.rc2")
+        if (rbacking != FORMAT_1_6)
         {
-            LOG(ERROR) << "could not restore from LevelDB because "
-                       << "the existing data was created by "
+            LOG(ERROR) << "could not restore daemon "
+                       << "the existing data was created with"
                        << "HyperDex " << rbacking << " but "
-                       << "this is version " << PACKAGE_VERSION;
+                       << "this is requires the v1.6.0-compatible format";
             return false;
         }
     }
     else if (st.IsNotFound())
     {
         first_time = true;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
+        leveldb::Slice k("hyperdex", 8);
+        leveldb::Slice v(FORMAT_1_6, STRLENOF(FORMAT_1_6));
+        st = m_db->Put(wopts, k, v);
+
+        if (!st.ok())
+        {
+            LOG(ERROR) << "could not save \"hyperdex\" key to disk: " << st.ToString();
+            return false;
+        }
     }
     else
     {
-        LOG(ERROR) << "could not restore from LevelDB because it returned an "
-                   << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
+        LOG(ERROR) << "could not read \"hyperdex\" key from LevelDB: " << st.ToString();
         return false;
     }
 
-    leveldb::Slice sk("state", 5);
+    // read the "state" key and parse it
     std::string sbacking;
-    st = m_db->Get(ropts, sk, &sbacking);
+    st = m_db->Get(ropts, leveldb::Slice("state", 5), &sbacking);
 
     if (st.ok())
     {
@@ -165,110 +176,52 @@ datalayer :: setup(const po6::pathname& path,
         {
             LOG(ERROR) << "could not restore from LevelDB because a previous "
                        << "execution crashed and the database was tampered with; "
-                       << "you're on your own with this one";
+                       << "you'll need to manually erase this DB and create a new one";
+            return false;
+        }
+
+        e::unpacker up(sbacking.data(), sbacking.size());
+        uint64_t us;
+        up = up >> us >> *saved_bind_to >> *saved_coordinator;
+        *saved_us = server_id(us);
+
+        if (up.error())
+        {
+            LOG(ERROR) << "could not restore from LevelDB because a previous "
+                       << "execution wrote an invalid state; "
+                       << "you'll need to manually erase this DB and create a new one";
             return false;
         }
     }
     else if (st.IsNotFound())
     {
-        if (!first_time)
+        if (!only_key_is_hyperdex_key())
         {
             LOG(ERROR) << "could not restore from LevelDB because a previous "
-                       << "execution crashed; run the recovery program and try again";
+                       << "execution didn't save state and wrote other data; "
+                       << "you'll need to manually erase this DB and create a new one";
             return false;
         }
     }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
-    }
     else
     {
-        LOG(ERROR) << "could not restore from LevelDB because it returned an "
-                   << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
+        LOG(ERROR) << "could not read \"hyperdex\" key from LevelDB: " << st.ToString();
         return false;
     }
 
-    {
-        po6::threads::mutex::hold hold(&m_block_cleaner);
-        m_cleaner.start();
-        m_shutdown = false;
-    }
-
-    if (first_time)
-    {
-        *saved = false;
-        return true;
-    }
-
-    uint64_t us;
-    *saved = true;
-    e::unpacker up(sbacking.data(), sbacking.size());
-    up = up >> us >> *saved_bind_to >> *saved_coordinator;
-    *saved_us = server_id(us);
-
-    if (up.error())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because a previous "
-                   << "execution saved invalid state; run the recovery program and try again";
-        return false;
-    }
-
+    m_checkpointer->start();
+    m_indexer->start();
+    m_wiper->start();
+    *saved = !first_time;
     return true;
 }
 
 void
 datalayer :: teardown()
 {
-    shutdown();
-}
-
-bool
-datalayer :: initialize()
-{
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
-    leveldb::Status st = m_db->Put(wopts, leveldb::Slice("hyperdex", 8),
-                                   leveldb::Slice(PACKAGE_VERSION, strlen(PACKAGE_VERSION)));
-
-    if (st.ok())
-    {
-        return true;
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "could not initialize LevelDB because Put returned NotFound:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not initialize LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not initialize LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "could not initialize LevelDB because it returned an "
-                   << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
-        return false;
-    }
+    m_checkpointer->shutdown();
+    m_indexer->shutdown();
+    m_wiper->shutdown();
 }
 
 bool
@@ -278,111 +231,21 @@ datalayer :: save_state(const server_id& us,
 {
     leveldb::WriteOptions wopts;
     wopts.sync = true;
-    leveldb::Status st = m_db->Put(wopts,
-                                   leveldb::Slice("dirty", 5),
-                                   leveldb::Slice("", 0));
-
-    if (st.ok())
-    {
-        // Yay
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "could not set dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: "
-                   << "could not set dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: "
-                   << "could not set dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't "
-                   << "know how to handle: could not set dirty bit";
-        return false;
-    }
-
     size_t sz = sizeof(uint64_t)
               + pack_size(bind_to)
               + pack_size(coordinator);
     std::auto_ptr<e::buffer> state(e::buffer::create(sz));
-    *state << us << bind_to << coordinator;
-    st = m_db->Put(wopts, leveldb::Slice("state", 5),
-                   leveldb::Slice(reinterpret_cast<const char*>(state->data()), state->size()));
+    state->pack() << us << bind_to << coordinator;
+    leveldb::Status st = m_db->Put(wopts, leveldb::Slice("state", 5),
+                                   leveldb::Slice(reinterpret_cast<const char*>(state->data()), state->size()));
 
     if (st.ok())
     {
         return true;
     }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "could not save state: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: "
-                   << "could not save state: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: "
-                   << "could not save state: "
-                   << st.ToString();
-        return false;
-    }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't "
-                   << "know how to handle: could not save state";
-        return false;
-    }
-}
-
-bool
-datalayer :: clear_dirty()
-{
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
-    leveldb::Slice key("dirty", 5);
-    leveldb::Status st = m_db->Delete(wopts, key);
-
-    if (st.ok() || st.IsNotFound())
-    {
-        return true;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: "
-                   << "could not clear dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: "
-                   << "could not clear dirty bit: "
-                   << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't "
-                   << "know how to handle: could not clear dirty bit";
+        LOG(ERROR) << "could not save state: " << st.ToString();
         return false;
     }
 }
@@ -390,51 +253,142 @@ datalayer :: clear_dirty()
 void
 datalayer :: pause()
 {
-    po6::threads::mutex::hold hold(&m_block_cleaner);
-    assert(!m_need_pause);
-    m_need_pause = true;
+    m_checkpointer->initiate_pause();
+    m_indexer->initiate_pause();
+    m_wiper->initiate_pause();
 }
 
 void
 datalayer :: unpause()
 {
-    po6::threads::mutex::hold hold(&m_block_cleaner);
-    assert(m_need_pause);
-    m_wakeup_cleaner.broadcast();
-    m_need_pause = false;
-    m_need_cleaning = true;
+    m_checkpointer->unpause();
+    m_indexer->unpause();
+    m_wiper->unpause();
 }
 
 void
 datalayer :: reconfigure(const configuration&,
-                         const configuration& new_config,
-                         const server_id& us)
+                         const configuration& config,
+                         const server_id&)
 {
-    {
-        po6::threads::mutex::hold hold(&m_block_cleaner);
-        assert(m_need_pause);
+    m_checkpointer->wait_until_paused();
+    m_indexer->wait_until_paused();
+    m_wiper->wait_until_paused();
 
-        while (!m_paused)
+    // indices that must exist
+    std::vector<std::pair<region_id, index_id> > indices;
+    config.all_indices(m_daemon->m_us, &indices);
+    std::sort(indices.begin(), indices.end());
+    std::vector<std::pair<region_id, index_id> >::iterator it;
+    it = std::unique(indices.begin(), indices.end());
+    indices.resize(it - indices.begin());
+
+    // iterate and create indices where necessary
+    std::vector<index_state> next_indices;
+    size_t old_idx = 0;
+    size_t new_idx = 0;
+
+    while (new_idx < indices.size())
+    {
+        int cmp = 1;
+
+        if (old_idx < m_indices.size())
         {
-            m_wakeup_reconfigurer.wait();
+            cmp = e::tuple_compare(m_indices[old_idx].ri, m_indices[old_idx].ii,
+                                   indices[new_idx].first, indices[old_idx].second);
+        }
+
+        if (cmp == 0)
+        {
+            // Case B
+            next_indices.push_back(m_indices[old_idx]);
+            ++old_idx;
+            ++new_idx;
+        }
+        else if (cmp < 0)
+        {
+            // Case A
+            ++old_idx;
+        }
+        else if (cmp > 0)
+        {
+            next_indices.push_back(index_state(indices[new_idx].first,
+                                               indices[new_idx].second));
+            ++new_idx;
+            region_id ri(indices[new_idx].first);
+            index_id ii(indices[new_idx].second);
+            char buf[sizeof(uint8_t) + 2 * VARINT_64_MAX_SIZE];
+            char* ptr = buf;
+            ptr = e::pack8be('I', ptr);
+            ptr = e::packvarint64(ri.get(), ptr);
+            ptr = e::packvarint64(ii.get(), ptr);
+            leveldb::ReadOptions ro;
+            leveldb::Slice key(buf, ptr - buf);
+            std::string val;
+            leveldb::Status st = m_db->Get(ro, key, &val);
+
+            if (st.ok())
+            {
+                next_indices.back().set_usable();
+            }
+            else if (!st.IsNotFound())
+            {
+                handle_error(st);
+            }
         }
     }
 
-    std::vector<capture> captures;
-    new_config.captures(&captures);
-    std::vector<region_id> regions;
-    regions.reserve(captures.size());
+    m_indices.swap(next_indices);
 
-    for (size_t i = 0; i < captures.size(); ++i)
+    // update the versions
+    std::vector<region_id> key_regions;
+    config.key_regions(m_daemon->m_us, &key_regions);
+    std::vector<region_id> xfer_regions;
+    config.transfers_in_regions(m_daemon->m_us, &xfer_regions);
+
+    for (size_t i = 0; i < xfer_regions.size(); ++i)
     {
-        if (new_config.get_virtual(captures[i].rid, us) != virtual_server_id())
+        if (config.is_point_leader(config.head_of_region(xfer_regions[i])))
         {
-            regions.push_back(captures[i].rid);
+            key_regions.push_back(xfer_regions[i]);
         }
     }
 
-    std::sort(regions.begin(), regions.end());
-    m_counters.adopt(regions);
+    e::ao_hash_map<region_id, uint64_t, id, defaultri> new_versions;
+
+    for (size_t i = 0; i < key_regions.size(); ++i)
+    {
+        uint64_t val = 0;
+
+        if (!m_versions.get(key_regions[i], &val))
+        {
+            val = disk_version(key_regions[i]);
+        }
+
+        new_versions.put(key_regions[i], val);
+    }
+
+    m_versions.swap(&new_versions);
+    m_indexer->kick();
+    m_wiper->kick();
+}
+
+void
+datalayer :: debug_dump()
+{
+    LOG(INFO) << "index state ===================================================================";
+
+    for (size_t i = 0; i < m_indices.size(); ++i)
+    {
+        LOG(INFO) << "index id=" << m_indices[i].ii.get()
+                  << " region=" << m_indices[i].ri.get()
+                  << " usable=" << (m_indices[i].is_usable() ? "yes" : "no");
+    }
+
+    m_checkpointer->debug_dump();
+    m_mediator->debug_dump();
+    m_indexer->debug_dump();
+    m_wiper->debug_dump();
 }
 
 bool
@@ -443,6 +397,14 @@ datalayer :: get_property(const e::slice& property,
 {
     leveldb::Slice prop(reinterpret_cast<const char*>(property.data()), property.size());
     return m_db->GetProperty(prop, value);
+}
+
+std::string
+datalayer :: get_timestamp()
+{
+    std::string timestamp;
+    m_db->GetReplayTimestamp(&timestamp);
+    return timestamp;
 }
 
 uint64_t
@@ -493,8 +455,6 @@ datalayer :: get(const region_id& ri,
 
 datalayer::returncode
 datalayer :: del(const region_id& ri,
-                 const region_id& reg_id,
-                 uint64_t seq_id,
                  const e::slice& key,
                  const std::vector<e::slice>& old_value)
 {
@@ -510,34 +470,9 @@ datalayer :: del(const region_id& ri,
     updates.Delete(lkey);
 
     // delete the index entries
-    const subspace& sub(*m_daemon->m_config.get_subspace(ri));
-    create_index_changes(sc, sub, ri, key, &old_value, NULL, &updates);
-
-    // Mark acked as part of this batch write
-    if (seq_id != 0)
-    {
-        char abacking[ACKED_BUF_SIZE];
-        seq_id = UINT64_MAX - seq_id;
-        encode_acked(ri, reg_id, seq_id, abacking);
-        leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-        leveldb::Slice aval("", 0);
-        updates.Put(akey, aval);
-    }
-
-    uint64_t count;
-
-    // If this is a captured region, then we must log this transfer
-    if (m_counters.lookup(ri, &count))
-    {
-        char tbacking[TRANSFER_BUF_SIZE];
-        capture_id cid = m_daemon->m_config.capture_for(ri);
-        assert(cid != capture_id());
-        leveldb::Slice tkey(tbacking, TRANSFER_BUF_SIZE);
-        leveldb::Slice tval;
-        encode_transfer(cid, count, tbacking);
-        encode_key_value(key, NULL, 0, &scratch, &tval);
-        updates.Put(tkey, tval);
-    }
+    std::vector<const index*> indices;
+    find_indices(ri, &indices);
+    create_index_changes(sc, ri, indices, key, &old_value, NULL, &updates);
 
     // Perform the write
     leveldb::WriteOptions opts;
@@ -560,8 +495,6 @@ datalayer :: del(const region_id& ri,
 
 datalayer::returncode
 datalayer :: put(const region_id& ri,
-                 const region_id& reg_id,
-                 uint64_t seq_id,
                  const e::slice& key,
                  const std::vector<e::slice>& new_value,
                  uint64_t version)
@@ -583,34 +516,12 @@ datalayer :: put(const region_id& ri,
     updates.Put(lkey, lval);
 
     // put the index entries
-    const subspace& sub(*m_daemon->m_config.get_subspace(ri));
-    create_index_changes(sc, sub, ri, key, NULL, &new_value, &updates);
+    std::vector<const index*> indices;
+    find_indices(ri, &indices);
+    create_index_changes(sc, ri, indices, key, NULL, &new_value, &updates);
 
-    // Mark acked as part of this batch write
-    if (seq_id != 0)
-    {
-        char abacking[ACKED_BUF_SIZE];
-        seq_id = UINT64_MAX - seq_id;
-        encode_acked(ri, reg_id, seq_id, abacking);
-        leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-        leveldb::Slice aval("", 0);
-        updates.Put(akey, aval);
-    }
-
-    uint64_t count;
-
-    // If this is a captured region, then we must log this transfer
-    if (m_counters.lookup(ri, &count))
-    {
-        char tbacking[TRANSFER_BUF_SIZE];
-        capture_id cid = m_daemon->m_config.capture_for(ri);
-        assert(cid != capture_id());
-        leveldb::Slice tkey(tbacking, TRANSFER_BUF_SIZE);
-        leveldb::Slice tval;
-        encode_transfer(cid, count, tbacking);
-        encode_key_value(key, &new_value, version, &scratch1, &tval);
-        updates.Put(tkey, tval);
-    }
+    // ensure we've recorded a version at least as high as this key
+    write_version(ri, version, &updates);
 
     // Perform the write
     leveldb::WriteOptions opts;
@@ -619,6 +530,7 @@ datalayer :: put(const region_id& ri,
 
     if (st.ok())
     {
+        update_memory_version(ri, version);
         return SUCCESS;
     }
     else
@@ -629,8 +541,6 @@ datalayer :: put(const region_id& ri,
 
 datalayer::returncode
 datalayer :: overput(const region_id& ri,
-                     const region_id& reg_id,
-                     uint64_t seq_id,
                      const e::slice& key,
                      const std::vector<e::slice>& old_value,
                      const std::vector<e::slice>& new_value,
@@ -653,34 +563,12 @@ datalayer :: overput(const region_id& ri,
     updates.Put(lkey, lval);
 
     // put the index entries
-    const subspace& sub(*m_daemon->m_config.get_subspace(ri));
-    create_index_changes(sc, sub, ri, key, &old_value, &new_value, &updates);
+    std::vector<const index*> indices;
+    find_indices(ri, &indices);
+    create_index_changes(sc, ri, indices, key, &old_value, &new_value, &updates);
 
-    // Mark acked as part of this batch write
-    if (seq_id != 0)
-    {
-        char abacking[ACKED_BUF_SIZE];
-        seq_id = UINT64_MAX - seq_id;
-        encode_acked(ri, reg_id, seq_id, abacking);
-        leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-        leveldb::Slice aval("", 0);
-        updates.Put(akey, aval);
-    }
-
-    uint64_t count;
-
-    // If this is a captured region, then we must log this transfer
-    if (m_counters.lookup(ri, &count))
-    {
-        char tbacking[TRANSFER_BUF_SIZE];
-        capture_id cid = m_daemon->m_config.capture_for(ri);
-        assert(cid != capture_id());
-        leveldb::Slice tkey(tbacking, TRANSFER_BUF_SIZE);
-        leveldb::Slice tval;
-        encode_transfer(cid, count, tbacking);
-        encode_key_value(key, &new_value, version, &scratch1, &tval);
-        updates.Put(tkey, tval);
-    }
+    // ensure we've recorded a version at least as high as this key
+    write_version(ri, version, &updates);
 
     // Perform the write
     leveldb::WriteOptions opts;
@@ -689,6 +577,7 @@ datalayer :: overput(const region_id& ri,
 
     if (st.ok())
     {
+        update_memory_version(ri, version);
         return SUCCESS;
     }
     else
@@ -732,7 +621,7 @@ datalayer :: uncertain_del(const region_id& ri,
             return BAD_ENCODING;
         }
 
-        return del(ri, region_id(), 0, key, old_value);
+        return del(ri, key, old_value);
     }
     else if (st.IsNotFound())
     {
@@ -781,262 +670,22 @@ datalayer :: uncertain_put(const region_id& ri,
             return BAD_ENCODING;
         }
 
-        return overput(ri, region_id(), 0, key, old_value, new_value, version);
+        return overput(ri, key, old_value, new_value, version);
     }
     else if (st.IsNotFound())
     {
-        return put(ri, region_id(), 0, key, new_value, version);
+        return put(ri, key, new_value, version);
     }
     else
     {
         return handle_error(st);
     }
-}
-
-datalayer::returncode
-datalayer :: get_transfer(const region_id& ri,
-                          uint64_t seq_no,
-                          bool* has_value,
-                          e::slice* key,
-                          std::vector<e::slice>* value,
-                          uint64_t* version,
-                          reference* ref)
-{
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    char tbacking[TRANSFER_BUF_SIZE];
-    capture_id cid = m_daemon->m_config.capture_for(ri);
-    assert(cid != capture_id());
-    leveldb::Slice lkey(tbacking, TRANSFER_BUF_SIZE);
-    encode_transfer(cid, seq_no, tbacking);
-    leveldb::Status st = m_db->Get(opts, lkey, &ref->m_backing);
-
-    if (st.ok())
-    {
-        e::slice v(ref->m_backing.data(), ref->m_backing.size());
-        return decode_key_value(v, has_value, key, value, version);
-    }
-    else if (st.IsNotFound())
-    {
-        return NOT_FOUND;
-    }
-    else
-    {
-        return handle_error(st);
-    }
-}
-
-bool
-datalayer :: check_acked(const region_id& ri,
-                         const region_id& reg_id,
-                         uint64_t seq_id)
-{
-    // make it so that increasing seq_ids are ordered in reverse in the KVS
-    seq_id = UINT64_MAX - seq_id;
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    char abacking[ACKED_BUF_SIZE];
-    encode_acked(ri, reg_id, seq_id, abacking);
-    leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-    std::string val;
-    leveldb::Status st = m_db->Get(opts, akey, &val);
-
-    if (st.ok())
-    {
-        return true;
-    }
-    else if (st.IsNotFound())
-    {
-        return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-        return false;
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
-        return false;
-    }
-}
-
-void
-datalayer :: mark_acked(const region_id& ri,
-                        const region_id& reg_id,
-                        uint64_t seq_id)
-{
-    // make it so that increasing seq_ids are ordered in reverse in the KVS
-    seq_id = UINT64_MAX - seq_id;
-    leveldb::WriteOptions opts;
-    opts.sync = false;
-    char abacking[ACKED_BUF_SIZE];
-    encode_acked(ri, reg_id, seq_id, abacking);
-    leveldb::Slice akey(abacking, ACKED_BUF_SIZE);
-    leveldb::Slice val("", 0);
-    leveldb::Status st = m_db->Put(opts, akey, val);
-
-    if (st.ok())
-    {
-        // Yay!
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "mark_acked returned NOT_FOUND at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error at the disk layer: region=" << reg_id
-                   << " seq_id=" << seq_id << " desc=" << st.ToString();
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
-    }
-}
-
-void
-datalayer :: max_seq_id(const region_id& reg_id,
-                        uint64_t* seq_id)
-{
-    leveldb::ReadOptions opts;
-    opts.fill_cache = false;
-    opts.verify_checksums = true;
-    opts.snapshot = NULL;
-    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
-    char abacking[ACKED_BUF_SIZE];
-    encode_acked(reg_id, reg_id, 0, abacking);
-    leveldb::Slice key(abacking, ACKED_BUF_SIZE);
-    it->Seek(key);
-
-    if (!it->Valid())
-    {
-        *seq_id = 0;
-        return;
-    }
-
-    key = it->key();
-    region_id tmp_ri;
-    region_id tmp_reg_id;
-    uint64_t tmp_seq_id;
-    datalayer::returncode rc = decode_acked(e::slice(key.data(), key.size()),
-                                            &tmp_ri, &tmp_reg_id, &tmp_seq_id);
-
-    if (rc != SUCCESS || tmp_ri != reg_id || tmp_reg_id != reg_id)
-    {
-        *seq_id = 0;
-        return;
-    }
-
-    *seq_id = UINT64_MAX - tmp_seq_id;
-}
-
-void
-datalayer :: clear_acked(const region_id& reg_id,
-                         uint64_t seq_id)
-{
-    leveldb::ReadOptions opts;
-    opts.fill_cache = false;
-    opts.verify_checksums = true;
-    opts.snapshot = NULL;
-    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
-    char abacking[ACKED_BUF_SIZE];
-    encode_acked(region_id(0), reg_id, 0, abacking);
-    it->Seek(leveldb::Slice(abacking, ACKED_BUF_SIZE));
-    encode_acked(region_id(0), region_id(reg_id.get() + 1), 0, abacking);
-    leveldb::Slice upper_bound(abacking, ACKED_BUF_SIZE);
-
-    while (it->Valid() &&
-           it->key().compare(upper_bound) < 0)
-    {
-        region_id tmp_ri;
-        region_id tmp_reg_id;
-        uint64_t tmp_seq_id;
-        datalayer::returncode rc = decode_acked(e::slice(it->key().data(), it->key().size()),
-                                                &tmp_ri, &tmp_reg_id, &tmp_seq_id);
-        tmp_seq_id = UINT64_MAX - tmp_seq_id;
-
-        if (rc == SUCCESS &&
-            tmp_reg_id == reg_id &&
-            tmp_seq_id < seq_id)
-        {
-            leveldb::WriteOptions wopts;
-            wopts.sync = false;
-            leveldb::Status st = m_db->Delete(wopts, it->key());
-
-            if (st.ok() || st.IsNotFound())
-            {
-                // WOOT!
-            }
-            else if (st.IsCorruption())
-            {
-                LOG(ERROR) << "corruption at the disk layer: could not delete "
-                           << reg_id << " " << seq_id << ": desc=" << st.ToString();
-            }
-            else if (st.IsIOError())
-            {
-                LOG(ERROR) << "IO error at the disk layer: could not delete "
-                           << reg_id << " " << seq_id << ": desc=" << st.ToString();
-            }
-            else
-            {
-                LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
-            }
-        }
-
-        it->Next();
-    }
-}
-
-void
-datalayer :: request_wipe(const capture_id& cid)
-{
-    po6::threads::mutex::hold hold(&m_block_cleaner);
-    m_state_transfer_captures.insert(cid);
-    m_wakeup_cleaner.broadcast();
 }
 
 datalayer::snapshot
 datalayer :: make_snapshot()
 {
     return leveldb_snapshot_ptr(m_db, m_db->GetSnapshot());
-}
-
-datalayer::iterator*
-datalayer :: make_region_iterator(snapshot snap,
-                                  const region_id& ri,
-                                  returncode* error)
-{
-    *error = datalayer::SUCCESS;
-    const size_t backing_sz = sizeof(uint8_t) + sizeof(uint64_t);
-    char backing[backing_sz];
-    char* ptr = backing;
-    ptr = e::pack8be('o', ptr);
-    ptr = e::pack64be(ri.get(), ptr);
-
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    opts.snapshot = snap.get();
-    leveldb_iterator_ptr iter;
-    iter.reset(snap, m_db->NewIterator(opts));
-    const schema& sc(*m_daemon->m_config.get_schema(ri));
-    return new region_iterator(iter, ri, index_info::lookup(sc.attrs[0].type));
 }
 
 datalayer::iterator*
@@ -1050,9 +699,9 @@ datalayer :: make_search_iterator(snapshot snap,
 
     // pull a set of range queries from checks
     std::vector<range> ranges;
-    range_searches(checks, &ranges);
-    index_info* ki = index_info::lookup(sc.attrs[0].type);
-    const subspace& sub(*m_daemon->m_config.get_subspace(ri));
+    range_searches(sc, checks, &ranges);
+    const index_encoding* key_ie = index_encoding::lookup(sc.attrs[0].type);
+    const index_info* key_ii = index_info::lookup(sc.attrs[0].type);
 
     // for each range query, construct an iterator
     for (size_t i = 0; i < ranges.size(); ++i)
@@ -1065,50 +714,51 @@ datalayer :: make_search_iterator(snapshot snap,
 
         assert(ranges[i].attr < sc.attrs_sz);
         assert(ranges[i].type == sc.attrs[ranges[i].attr].type);
+        std::vector<const index*> indices;
+        find_indices(ri, ranges[i].attr, &indices);
 
-        if (ostr) *ostr << "considering attr " << ranges[i].attr << " Range("
-                        << ranges[i].start.hex() << ", " << ranges[i].end.hex() << " " << ranges[i].type << " "
-                        << (ranges[i].has_start ? "[" : "<") << "-" << (ranges[i].has_end ? "]" : ">")
-                        << " " << (ranges[i].invalid ? "invalid" : "valid") << "\n";
-
-        if (!sub.indexed(ranges[i].attr))
+        for (size_t j = 0; j < indices.size(); ++j)
         {
-            continue;
-        }
+            assert(indices[j]->attr == ranges[i].attr);
+            const index* idx = indices[j];
+            const index_info* ii = index_info::lookup(ranges[i].type);
 
-        index_info* ii = index_info::lookup(ranges[i].type);
+            if (!ii)
+            {
+                continue;
+            }
 
-        if (ii)
-        {
-            e::intrusive_ptr<index_iterator> it = ii->iterator_from_range(snap, ri, ranges[i], ki);
+            e::intrusive_ptr<index_iterator> it = ii->iterator_from_range(snap, ri, idx->id, ranges[i], key_ie);
 
             if (it)
             {
                 iterators.push_back(it);
+
+                if (ostr) *ostr << " considering attr " << ranges[i].attr << " Range("
+                                << ranges[i].start.hex() << ", " << ranges[i].end.hex() << ") " << ranges[i].type << " "
+                                << (ranges[i].has_start ? "[" : "<") << "-" << (ranges[i].has_end ? "]" : ">")
+                                << " " << (ranges[i].invalid ? "invalid" : "valid") << "\n";
             }
         }
     }
 
-    // for everything that is not a range query, construct an iterator
+    // For each index
     for (size_t i = 0; i < checks.size(); ++i)
     {
-        if (checks[i].predicate == HYPERPREDICATE_EQUALS ||
-            checks[i].predicate == HYPERPREDICATE_LESS_EQUAL ||
-            checks[i].predicate == HYPERPREDICATE_GREATER_EQUAL)
-        {
-            continue;
-        }
+        std::vector<const index*> indices;
+        find_indices(ri, checks[i].attr, &indices);
 
-        if (!sub.indexed(checks[i].attr))
+        for (size_t j = 0; j < indices.size(); ++j)
         {
-            continue;
-        }
+            const index* idx = indices[j];
+            const index_info* ii = index_info::lookup(sc.attrs[checks[i].attr].type);
 
-        index_info* ii = index_info::lookup(sc.attrs[checks[i].attr].type);
+            if (!ii)
+            {
+                continue;
+            }
 
-        if (ii)
-        {
-            e::intrusive_ptr<index_iterator> it = ii->iterator_from_check(snap, ri, checks[i], ki);
+            e::intrusive_ptr<index_iterator> it = ii->iterator_from_check(snap, ri, idx->id, checks[i], key_ie);
 
             if (it)
             {
@@ -1119,14 +769,8 @@ datalayer :: make_search_iterator(snapshot snap,
 
     // figure out the cost of accessing all objects
     e::intrusive_ptr<index_iterator> full_scan;
-    range scan;
-    scan.attr = 0;
-    scan.type = sc.attrs[0].type;
-    scan.has_start = false;
-    scan.has_end = false;
-    scan.invalid = false;
-    full_scan = ki->iterator_from_range(snap, ri, scan, ki);
-    if (ostr) *ostr << "accessing all objects has cost " << full_scan->cost(m_db.get()) << "\n";
+    full_scan = key_ii->iterator_for_keys(snap, ri);
+    if (ostr) *ostr << " accessing all objects has cost " << full_scan->cost(m_db.get()) << "\n";
 
     // figure out the cost of each iterator
     // we do this here and not below so that iterators can cache the size and we
@@ -1134,7 +778,7 @@ datalayer :: make_search_iterator(snapshot snap,
     for (size_t i = 0; i < iterators.size(); ++i)
     {
         uint64_t iterator_cost = iterators[i]->cost(m_db.get());
-        if (ostr) *ostr << "iterator " << *iterators[i] << " has cost " << iterator_cost << "\n";
+        if (ostr) *ostr << " iterator " << *iterators[i] << " has cost " << iterator_cost << "\n";
     }
 
     std::vector<e::intrusive_ptr<index_iterator> > sorted;
@@ -1154,36 +798,67 @@ datalayer :: make_search_iterator(snapshot snap,
 
     e::intrusive_ptr<index_iterator> best;
 
-    if (!sorted.empty())
+    if (!best && !sorted.empty())
     {
         best = new intersect_iterator(snap, sorted);
     }
-
-    if (!best || best->cost(m_db.get()) * 4 > full_scan->cost(m_db.get()))
+    else if (!best && !unsorted.empty())
+    {
+        best = unsorted[0];
+    }
+    else
     {
         best = full_scan;
     }
 
-    // just pick one; do something smart later
-    if (!unsorted.empty() && !best)
+    assert(best);
+    uint64_t cost = best->cost(m_db.get());
+
+    if (cost > 0 && cost * 4 > full_scan->cost(m_db.get()))
     {
-        best = unsorted[0];
+        best = full_scan;
     }
 
-    assert(best);
-    if (ostr) *ostr << "choosing to use " << *best << "\n";
+    if (ostr) *ostr << " choosing to use " << *best << "\n";
     return new search_iterator(this, ri, best, ostr, &checks);
+}
+
+bool
+datalayer :: backup(const e::slice& _name)
+{
+    leveldb::Slice name(reinterpret_cast<const char*>(_name.data()), _name.size());
+    leveldb::Status st = m_db->LiveBackup(name);
+
+    if (st.ok())
+    {
+        return true;
+    }
+    else if (st.IsCorruption())
+    {
+        LOG(ERROR) << "corruption while taking a backup: " << st.ToString();
+        return false;
+    }
+    else if (st.IsIOError())
+    {
+        LOG(ERROR) << "IO error while taking a backup: " << st.ToString();
+        return false;
+    }
+    else
+    {
+        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle: " << st.ToString();
+        return false;
+    }
 }
 
 datalayer::returncode
 datalayer :: get_from_iterator(const region_id& ri,
+                               const schema& sc,
                                iterator* iter,
                                e::slice* key,
                                std::vector<e::slice>* value,
                                uint64_t* version,
                                reference* ref)
 {
-    const schema& sc(*m_daemon->m_config.get_schema(ri));
     std::vector<char> scratch;
 
     // create the encoded key
@@ -1217,151 +892,504 @@ datalayer :: get_from_iterator(const region_id& ri,
     }
 }
 
-void
-datalayer :: cleaner()
+namespace
 {
-    LOG(INFO) << "cleanup thread started";
-    sigset_t ss;
 
-    if (sigfillset(&ss) < 0)
+uint64_t
+roundup_version(uint64_t v)
+{
+    const static uint64_t REGION_PERIODIC = hyperdex::datalayer::REGION_PERIODIC;
+    v += REGION_PERIODIC;
+    v  = v & ~(REGION_PERIODIC - 1);
+    return v;
+}
+
+}
+
+bool
+datalayer :: write_version(const region_id& ri,
+                           uint64_t version,
+                           leveldb::WriteBatch* updates)
+{
+    version = roundup_version(version);
+    uint64_t* current = NULL;
+
+    if (!m_versions.mod(ri, &current) ||
+        e::atomic::load_64_nobarrier(current) >= version)
     {
-        PLOG(ERROR) << "sigfillset";
-        return;
+        return false;
     }
 
-    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
-    {
-        PLOG(ERROR) << "could not block signals";
-        return;
-    }
-
-    while (true)
-    {
-        std::set<capture_id> state_transfer_captures;
-
-        {
-            po6::threads::mutex::hold hold(&m_block_cleaner);
-
-            while ((!m_need_cleaning &&
-                    m_state_transfer_captures.empty() &&
-                    !m_shutdown) || m_need_pause)
-            {
-                m_paused = true;
-
-                if (m_need_pause)
-                {
-                    m_wakeup_reconfigurer.signal();
-                }
-
-                m_wakeup_cleaner.wait();
-                m_paused = false;
-            }
-
-            if (m_shutdown)
-            {
-                break;
-            }
-
-            m_state_transfer_captures.swap(state_transfer_captures);
-            m_need_cleaning = false;
-        }
-
-        leveldb::ReadOptions opts;
-        opts.fill_cache = true;
-        opts.verify_checksums = true;
-        std::auto_ptr<leveldb::Iterator> it;
-        it.reset(m_db->NewIterator(opts));
-        it->Seek(leveldb::Slice("t", 1));
-        capture_id cached_cid;
-
-        while (it->Valid())
-        {
-            uint8_t prefix;
-            uint64_t cid;
-            uint64_t seq_no;
-            e::unpacker up(it->key().data(), it->key().size());
-            up = up >> prefix >> cid >> seq_no;
-
-            if (up.error() || prefix != 't')
-            {
-                break;
-            }
-
-            if (cid == cached_cid.get())
-            {
-                leveldb::WriteOptions wopts;
-                wopts.sync = false;
-                leveldb::Status st = m_db->Delete(wopts, it->key());
-
-                if (st.ok() || st.IsNotFound())
-                {
-                    // pass
-                }
-                else if (st.IsCorruption())
-                {
-                    LOG(ERROR) << "corruption at the disk layer: could not cleanup old transfers:"
-                               << " desc=" << st.ToString();
-                }
-                else if (st.IsIOError())
-                {
-                    LOG(ERROR) << "IO error at the disk layer: could not cleanup old transfers:"
-                               << " desc=" << st.ToString();
-                }
-                else
-                {
-                    LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
-                }
-
-                it->Next();
-                continue;
-            }
-
-            m_daemon->m_stm.report_wiped(cached_cid);
-
-            if (!m_daemon->m_config.is_captured_region(capture_id(cid)))
-            {
-                cached_cid = capture_id(cid);
-                continue;
-            }
-
-            if (state_transfer_captures.find(capture_id(cid)) != state_transfer_captures.end())
-            {
-                cached_cid = capture_id(cid);
-                state_transfer_captures.erase(cached_cid);
-                continue;
-            }
-
-            char tbacking[TRANSFER_BUF_SIZE];
-            leveldb::Slice slice(tbacking, TRANSFER_BUF_SIZE);
-            encode_transfer(capture_id(cid + 1), 0, tbacking);
-            it->Seek(slice);
-        }
-
-        while (!state_transfer_captures.empty())
-        {
-            m_daemon->m_stm.report_wiped(*state_transfer_captures.begin());
-            state_transfer_captures.erase(state_transfer_captures.begin());
-        }
-    }
-
-    LOG(INFO) << "cleanup thread shutting down";
+    char vbacking[VERSION_BUF_SIZE];
+    encode_version(ri, version, vbacking);
+    updates->Put(leveldb::Slice(vbacking, VERSION_BUF_SIZE), leveldb::Slice());
+    return true;
 }
 
 void
-datalayer :: shutdown()
+datalayer :: update_memory_version(const region_id& ri, uint64_t version)
 {
-    bool is_shutdown;
+    version = roundup_version(version);
+    uint64_t* current = NULL;
+    m_versions.mod(ri, &current);
 
+    if (current == NULL)
     {
-        po6::threads::mutex::hold hold(&m_block_cleaner);
-        m_wakeup_cleaner.broadcast();
-        is_shutdown = m_shutdown;
-        m_shutdown = true;
+        return;
     }
 
-    if (!is_shutdown)
+    uint64_t expected = e::atomic::load_64_nobarrier(current);
+    uint64_t witness  = 0;
+
+    while ((witness = e::atomic::compare_and_swap_64_nobarrier(current, expected, version)) < version)
     {
-        m_cleaner.join();
+        expected = witness;
+    }
+}
+
+void
+datalayer :: bump_version(const region_id& ri, uint64_t version)
+{
+    leveldb::WriteBatch updates;
+
+    if (!write_version(ri, version, &updates))
+    {
+        return;
+    }
+
+    // Perform the write
+    leveldb::WriteOptions opts;
+    opts.sync = false;
+    leveldb::Status st = m_db->Write(opts, &updates);
+
+    if (!st.ok())
+    {
+        handle_error(st);
+    }
+
+    update_memory_version(ri, version);
+}
+
+uint64_t
+datalayer :: max_version(const region_id& ri)
+{
+    uint64_t val;
+
+    if (!m_versions.get(ri, &val))
+    {
+        val = disk_version(ri);
+    }
+
+    return val;
+}
+
+uint64_t
+datalayer :: disk_version(const region_id& ri)
+{
+    leveldb::ReadOptions opts;
+    opts.fill_cache = false;
+    opts.verify_checksums = true;
+    opts.snapshot = NULL;
+    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
+    char vbacking[VERSION_BUF_SIZE];
+    encode_version(ri, UINT64_MAX, vbacking);
+    leveldb::Slice key(vbacking, VERSION_BUF_SIZE);
+    it->Seek(key);
+
+    if (!it->Valid())
+    {
+        // XXX err
+        return 0;
+    }
+
+    key = it->key();
+    region_id tmp_ri;
+    uint64_t tmp_version;
+    datalayer::returncode rc = decode_version(e::slice(key.data(), key.size()),
+                                              &tmp_ri, &tmp_version);
+
+    if (rc != SUCCESS)
+    {
+        // XXX err
+        return 0;
+    }
+
+    if (tmp_ri != ri)
+    {
+        return 0;
+    }
+
+    return tmp_version;
+}
+
+datalayer::returncode
+datalayer :: create_checkpoint(const region_timestamp& rt)
+{
+    m_wiper->inhibit_wiping();
+    e::guard g = e::makeobjguard(*m_wiper, &wiper_thread::permit_wiping);
+    g.use_variable();
+
+    if (m_wiper->region_will_be_wiped(rt.rid))
+    {
+        return SUCCESS;
+    }
+
+    char cbacking[CHECKPOINT_BUF_SIZE];
+    encode_checkpoint(rt.rid, rt.checkpoint, cbacking);
+    leveldb::WriteOptions opts;
+    opts.sync = false;
+    leveldb::Slice ckey(cbacking, CHECKPOINT_BUF_SIZE);
+    leveldb::Slice val(rt.local_timestamp);
+    leveldb::Status st = m_db->Put(opts, ckey, val);
+
+    if (!st.ok())
+    {
+        return handle_error(st);
+    }
+
+    return SUCCESS;
+}
+
+void
+datalayer :: set_checkpoint_gc(uint64_t checkpoint_gc)
+{
+    m_checkpointer->set_checkpoint_gc(checkpoint_gc);
+}
+
+void
+datalayer :: largest_checkpoint_for(const region_id& ri, uint64_t* checkpoint)
+{
+    m_wiper->inhibit_wiping();
+    e::guard g = e::makeobjguard(*m_wiper, &wiper_thread::permit_wiping);
+    g.use_variable();
+
+    if (m_wiper->region_will_be_wiped(ri))
+    {
+        *checkpoint = 0;
+        return;
+    }
+
+    leveldb::ReadOptions opts;
+    opts.verify_checksums = true;
+    std::auto_ptr<leveldb::Iterator> it;
+    it.reset(m_db->NewIterator(opts));
+    char cbacking[CHECKPOINT_BUF_SIZE];
+    encode_checkpoint(ri, 0, cbacking);
+    it->Seek(leveldb::Slice(cbacking, CHECKPOINT_BUF_SIZE));
+    *checkpoint = 0;
+
+    while (it->Valid())
+    {
+        region_timestamp rt;
+        e::slice key(it->key().data(), it->key().size());
+        returncode rc = decode_checkpoint(key, &rt.rid, &rt.checkpoint);
+
+        if (rc != datalayer::SUCCESS)
+        {
+            break;
+        }
+
+        if (rt.rid != ri)
+        {
+            break;
+        }
+
+        *checkpoint = std::max(*checkpoint, rt.checkpoint);
+        it->Next();
+    }
+}
+
+bool
+datalayer :: region_will_be_wiped(region_id rid)
+{
+    return m_wiper->region_will_be_wiped(rid);
+}
+
+void
+datalayer :: request_wipe(const transfer_id& xid,
+                          const region_id& ri)
+{
+    m_wiper->request_wipe(xid, ri);
+}
+
+void
+datalayer :: inhibit_wiping()
+{
+    m_wiper->inhibit_wiping();
+}
+
+void
+datalayer :: permit_wiping()
+{
+    m_wiper->permit_wiping();
+}
+
+datalayer::replay_iterator*
+datalayer :: replay_region_from_checkpoint(const region_id& ri,
+                                           uint64_t checkpoint,
+                                           bool* wipe)
+{
+    m_wiper->inhibit_wiping();
+    e::guard g1 = e::makeobjguard(*m_wiper, &wiper_thread::permit_wiping);
+    g1.use_variable();
+    m_checkpointer->inhibit_gc();
+    e::guard g2 = e::makeobjguard(*m_checkpointer, &checkpointer_thread::permit_gc);
+    g2.use_variable();
+
+    leveldb::ReadOptions opts;
+    opts.verify_checksums = true;
+    std::auto_ptr<leveldb::Iterator> it;
+    it.reset(m_db->NewIterator(opts));
+    char cbacking[CHECKPOINT_BUF_SIZE];
+    encode_checkpoint(ri, 0, cbacking);
+    it->Seek(leveldb::Slice(cbacking, CHECKPOINT_BUF_SIZE));
+    std::string local_timestamp("all");
+
+    while (it->Valid())
+    {
+        region_timestamp rt;
+        e::slice key(it->key().data(), it->key().size());
+        returncode rc = decode_checkpoint(key, &rt.rid, &rt.checkpoint);
+
+        if (rc != datalayer::SUCCESS)
+        {
+            break;
+        }
+
+        if (rt.rid != ri || rt.checkpoint > checkpoint)
+        {
+            break;
+        }
+
+        local_timestamp.assign(it->value().data(), it->value().size());
+        it->Next();
+    }
+
+    assert(!m_wiper->region_will_be_wiped(ri));
+    *wipe = local_timestamp == "all";
+    leveldb::ReplayIterator* iter;
+    leveldb::Status st = m_db->GetReplayIterator(local_timestamp, &iter);
+
+    if (!st.ok())
+    {
+        LOG(ERROR) << "LevelDB corruption: invalid timestamp";
+        abort();
+    }
+
+    leveldb_replay_iterator_ptr ptr(m_db, iter);
+    const schema& sc(*m_daemon->m_config.get_schema(ri));
+    return new replay_iterator(ri, ptr, index_encoding::lookup(sc.attrs[0].type));
+}
+
+void
+datalayer :: create_index_marker(const region_id& ri, const index_id& ii)
+{
+    char buf[sizeof(uint8_t) + 2 * VARINT_64_MAX_SIZE];
+    char* ptr = buf;
+    ptr = e::pack8be('I', ptr);
+    ptr = e::packvarint64(ri.get(), ptr);
+    ptr = e::packvarint64(ii.get(), ptr);
+    leveldb::Slice key(buf, ptr - buf);
+    leveldb::Slice val;
+    leveldb::Status st = m_db->Put(leveldb::WriteOptions(), key, val);
+
+    if (!st.ok())
+    {
+        LOG(ERROR) << "LevelDB corruption: could not put";
+        abort();
+    }
+}
+
+bool
+datalayer :: has_index_marker(const region_id& ri, const index_id& ii)
+{
+    char buf[sizeof(uint8_t) + 2 * VARINT_64_MAX_SIZE];
+    char* ptr = buf;
+    ptr = e::pack8be('I', ptr);
+    ptr = e::packvarint64(ri.get(), ptr);
+    ptr = e::packvarint64(ii.get(), ptr);
+    leveldb::Slice key(buf, ptr - buf);
+    std::string val;
+    leveldb::Status st = m_db->Get(leveldb::ReadOptions(), key, &val);
+
+    if (!st.ok() && !st.IsNotFound())
+    {
+        LOG(ERROR) << "LevelDB corruption: could not get";
+        abort();
+    }
+
+    return st.ok();
+}
+
+bool
+datalayer :: only_key_is_hyperdex_key()
+{
+    leveldb::ReadOptions opts;
+    opts.fill_cache = false;
+    opts.verify_checksums = true;
+    opts.snapshot = NULL;
+    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
+    it->SeekToFirst();
+    bool seen = false;
+
+    while (it->Valid())
+    {
+        if (it->key().compare(leveldb::Slice("hyperdex", 8)) != 0)
+        {
+            return false;
+        }
+
+        it->Next();
+        seen = true;
+    }
+
+    return seen;
+}
+
+bool
+datalayer :: upgrade_13x_to_14()
+{
+    leveldb::WriteOptions wopts;
+    wopts.sync = true;
+
+    // first scan every key that starts with "a", making a map from region id to max seqid.
+    std::map<region_id, uint64_t> seq_ids;
+    leveldb::ReadOptions ropts;
+    ropts.fill_cache = false;
+    ropts.verify_checksums = true;
+    ropts.snapshot = NULL;
+    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(ropts));
+    it->Seek(leveldb::Slice("a", 1));
+
+    while (it->Valid())
+    {
+        if (it->key().size() != sizeof(uint64_t) * 3 + 1 ||
+            it->key().data()[0] != 'a')
+        {
+            break;
+        }
+
+        const char* ptr = it->key().data();
+        uint64_t reg_id;
+        uint64_t seq_id;
+        uint64_t ri;
+        e::unpack64be(ptr + 1, &reg_id);
+        e::unpack64be(ptr + 9, &seq_id);
+        e::unpack64be(ptr + 17, &ri);
+
+        if (reg_id == ri)
+        {
+            seq_id = std::max(seq_ids[region_id(ri)], UINT64_MAX - seq_id);
+            seq_ids[region_id(ri)] = seq_id;
+        }
+
+        it->Next();
+    }
+
+    if (!it->status().ok())
+    {
+        LOG(ERROR) << "could not upgrade to 1.4: " << it->status().ToString();
+        return false;
+    }
+
+    // now write out versions for the regions that we saw
+    for (std::map<region_id, uint64_t>::iterator s = seq_ids.begin();
+            s != seq_ids.end(); ++s)
+    {
+        char vbacking[VERSION_BUF_SIZE];
+        uint64_t v = std::max(s->second, disk_version(s->first));
+        encode_version(s->first, roundup_version(v), vbacking);
+        leveldb::Status st = m_db->Put(wopts, leveldb::Slice(vbacking, VERSION_BUF_SIZE), leveldb::Slice());
+
+        if (!st.ok())
+        {
+            LOG(ERROR) << "could not upgrade to 1.4: " << st.ToString();
+            return false;
+        }
+    }
+
+    // only after those are on disk should we delete the original keys
+    it->Seek(leveldb::Slice("a", 1));
+
+    while (it->Valid())
+    {
+        if (it->key().size() == sizeof(uint64_t) * 3 + 1 ||
+            it->key().data()[0] != 'a')
+        {
+            break;
+        }
+
+        leveldb::Status st = m_db->Delete(wopts, it->key());
+
+        if (!st.ok())
+        {
+            LOG(ERROR) << "could not upgrade to 1.4: " << it->status().ToString();
+            return false;
+        }
+
+        it->Next();
+    }
+
+    if (!it->status().ok())
+    {
+        LOG(ERROR) << "could not upgrade to 1.4: " << it->status().ToString();
+        return false;
+    }
+
+    // finally mark the new version
+    leveldb::Slice k("hyperdex", 8);
+    leveldb::Slice v(PACKAGE_VERSION, STRLENOF(PACKAGE_VERSION));
+    leveldb::Status st = m_db->Put(wopts, k, v);
+
+    if (!st.ok())
+    {
+        LOG(ERROR) << "could not upgrade to 1.4: " << st.ToString();
+        return false;
+    }
+
+    return true;
+}
+
+void
+datalayer :: find_indices(const region_id& rid, std::vector<const index*>* indices)
+{
+    std::vector<index_state>::iterator it;
+    it = std::lower_bound(m_indices.begin(), m_indices.end(), rid);
+
+    for (; it < m_indices.end() && it->ri == rid; ++it)
+    {
+        if (!it->is_usable())
+        {
+            continue;
+        }
+
+        const index* idx = m_daemon->m_config.get_index(it->ii);
+        assert(idx);
+        indices->push_back(idx);
+    }
+}
+
+void
+datalayer :: find_indices(const region_id& rid, uint16_t attr,
+                          std::vector<const index*>* indices)
+{
+    std::vector<index_state>::iterator it;
+    it = std::lower_bound(m_indices.begin(), m_indices.end(), rid);
+
+    for (; it < m_indices.end() && it->ri == rid; ++it)
+    {
+        if (!it->is_usable())
+        {
+            continue;
+        }
+
+        const index* idx = m_daemon->m_config.get_index(it->ii);
+        assert(idx);
+
+        if (idx->attr == attr)
+        {
+            indices->push_back(idx);
+        }
     }
 }
 
@@ -1380,7 +1408,8 @@ datalayer :: handle_error(leveldb::Status st)
     }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle:";
+        LOG(ERROR) << st.ToString();
         return LEVELDB_ERROR;
     }
 }

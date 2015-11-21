@@ -35,10 +35,61 @@
 
 // HyperDex
 #include "common/datatype_float.h"
+#include "common/datatype_int64.h"
 #include "common/ordered_encoding.h"
 
 using hyperdex::datatype_info;
 using hyperdex::datatype_float;
+
+double
+datatype_float :: unpack(const e::slice& value)
+{
+    assert(value.size() == 0 || value.size() == sizeof(int64_t));
+
+    if (value.size() == 0)
+    {
+        return 0;
+    }
+
+    double number;
+    e::unpackdoublele(value.data(), &number);
+    return number;
+}
+
+double
+datatype_float :: unpack(const funcall& value)
+{
+    if (value.arg1_datatype == HYPERDATATYPE_INT64)
+    {
+        return datatype_int64::unpack(value.arg1);
+    }
+    else if (value.arg1_datatype == HYPERDATATYPE_FLOAT)
+    {
+        return datatype_float::unpack(value.arg1);
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+void
+datatype_float :: pack(double num, std::vector<char>* scratch, e::slice* value)
+{
+    if (scratch->size() < sizeof(double))
+    {
+        scratch->resize(sizeof(double));
+    }
+
+    e::packdoublele(num, &(*scratch)[0]);
+    *value = e::slice(&(*scratch)[0], sizeof(double));
+}
+
+bool
+datatype_float :: static_validate(const e::slice& value)
+{
+    return value.size() == sizeof(double) || value.empty();
+}
 
 datatype_float :: datatype_float()
 {
@@ -49,46 +100,43 @@ datatype_float :: ~datatype_float() throw ()
 }
 
 hyperdatatype
-datatype_float :: datatype()
+datatype_float :: datatype() const
 {
     return HYPERDATATYPE_FLOAT;
 }
 
 bool
-datatype_float :: validate(const e::slice& value)
+datatype_float :: validate(const e::slice& value) const
 {
-    return value.size() == sizeof(double) || value.empty();
+    return static_validate(value);
 }
 
 bool
-datatype_float :: check_args(const funcall& func)
+datatype_float :: check_args(const funcall& func) const
 {
-    return func.arg1_datatype == HYPERDATATYPE_FLOAT &&
-           validate(func.arg1) &&
+    return ((func.arg1_datatype == HYPERDATATYPE_FLOAT && validate(func.arg1)) ||
+            (func.arg1_datatype == HYPERDATATYPE_INT64 && datatype_int64::static_validate(func.arg1))) &&
            (func.name == FUNC_SET ||
             func.name == FUNC_NUM_ADD ||
             func.name == FUNC_NUM_SUB ||
             func.name == FUNC_NUM_MUL ||
-            func.name == FUNC_NUM_DIV);
+            func.name == FUNC_NUM_DIV ||
+            func.name == FUNC_NUM_MAX ||
+            func.name == FUNC_NUM_MIN);
 }
 
-uint8_t*
+bool
 datatype_float :: apply(const e::slice& old_value,
                         const funcall* funcs, size_t funcs_sz,
-                        uint8_t* writeto)
+                        e::arena* new_memory,
+                        e::slice* new_value) const
 {
-    double number = 0.0;
-
-    if (validate(old_value) && old_value.size() == sizeof(double))
-    {
-        e::unpackdoublele(old_value.data(), &number);
-    }
+    double number = unpack(old_value);
 
     for (size_t i = 0; i < funcs_sz; ++i)
     {
         const funcall* func = funcs + i;
-        double arg;
-        e::unpackdoublele(func->arg1.data(), &arg);
+        double arg = unpack(*func);
 
         switch (func->name)
         {
@@ -107,18 +155,28 @@ datatype_float :: apply(const e::slice& old_value,
             case FUNC_NUM_DIV:
                 number /= arg;
                 break;
+            case FUNC_NUM_MAX:
+                number = std::max(number, arg);
+                break;
+            case FUNC_NUM_MIN:
+                number = std::min(number, arg);
+                break;
             case FUNC_NUM_MOD:
             case FUNC_NUM_AND:
             case FUNC_NUM_OR:
             case FUNC_NUM_XOR:
             case FUNC_STRING_APPEND:
             case FUNC_STRING_PREPEND:
+            case FUNC_STRING_LTRIM:
+            case FUNC_STRING_RTRIM:
             case FUNC_LIST_LPUSH:
             case FUNC_LIST_RPUSH:
             case FUNC_SET_ADD:
             case FUNC_SET_REMOVE:
             case FUNC_SET_INTERSECT:
             case FUNC_SET_UNION:
+            case FUNC_DOC_RENAME:
+            case FUNC_DOC_UNSET:
             case FUNC_MAP_ADD:
             case FUNC_MAP_REMOVE:
             case FUNC_FAIL:
@@ -127,38 +185,35 @@ datatype_float :: apply(const e::slice& old_value,
         }
     }
 
-    return e::packdoublele(number, writeto);
+    uint8_t* ptr = NULL;
+    new_memory->allocate(sizeof(double), &ptr);
+    e::packdoublele(number, ptr);
+    *new_value = e::slice(ptr, sizeof(double));
+    return true;
 }
 
 bool
-datatype_float :: hashable()
+datatype_float :: hashable() const
 {
     return true;
 }
 
-
 uint64_t
-datatype_float :: hash(const e::slice& value)
+datatype_float :: hash(const e::slice& value) const
 {
     assert(validate(value));
-    double number = 0;
-
-    if (value.size() == sizeof(double))
-    {
-        e::unpackdoublele(value.data(), &number);
-    }
-
+    double number = unpack(value);
     return ordered_encode_double(number);
 }
 
 bool
-datatype_float :: indexable()
+datatype_float :: indexable() const
 {
     return true;
 }
 
 bool
-datatype_float :: containable()
+datatype_float :: containable() const
 {
     return true;
 }
@@ -166,7 +221,7 @@ datatype_float :: containable()
 bool
 datatype_float :: step(const uint8_t** ptr,
                        const uint8_t* end,
-                       e::slice* elem)
+                       e::slice* elem) const
 {
     if (static_cast<size_t>(end - *ptr) < sizeof(double))
     {
@@ -178,16 +233,22 @@ datatype_float :: step(const uint8_t** ptr,
     return true;
 }
 
-uint8_t*
-datatype_float :: write(uint8_t* writeto,
-                        const e::slice& elem)
+uint64_t
+datatype_float :: write_sz(const e::slice& elem) const
 {
-    memmove(writeto, elem.data(), elem.size());
-    return writeto + elem.size();
+    return elem.size();
+}
+
+uint8_t*
+datatype_float :: write(const e::slice& elem,
+                        uint8_t* write_to) const
+{
+    memmove(write_to, elem.data(), elem.size());
+    return write_to + elem.size();
 }
 
 bool
-datatype_float :: comparable()
+datatype_float :: comparable() const
 {
     return true;
 }
@@ -196,10 +257,8 @@ static int
 compare(const e::slice& lhs,
         const e::slice& rhs)
 {
-    double lhsnum = 0;
-    double rhsnum = 0;
-    e::unpackdoublele(lhs.data(), &lhsnum);
-    e::unpackdoublele(rhs.data(), &rhsnum);
+    double lhsnum = datatype_float::unpack(lhs);
+    double rhsnum = datatype_float::unpack(rhs);
 
     if (lhsnum < rhsnum)
     {
@@ -214,7 +273,7 @@ compare(const e::slice& lhs,
 }
 
 int
-datatype_float :: compare(const e::slice& lhs, const e::slice& rhs)
+datatype_float :: compare(const e::slice& lhs, const e::slice& rhs) const
 {
     return ::compare(lhs, rhs);
 }
@@ -227,7 +286,7 @@ compare_less(const e::slice& lhs,
 }
 
 datatype_info::compares_less
-datatype_float :: compare_less()
+datatype_float :: compare_less() const
 {
     return &::compare_less;
 }
